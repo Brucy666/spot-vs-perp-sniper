@@ -11,6 +11,7 @@ from feeds.okx_feed import OKXCVDTracker
 
 from utils.discord_alert import send_discord_alert
 from utils.memory_logger import log_snapshot
+from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 
 load_dotenv()
 
@@ -21,6 +22,7 @@ class SpotVsPerpEngine:
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
         self.last_signal = None
+        self.test_snapshot_sent = False  # Prevent duplicate test insert
 
     async def run(self):
         await asyncio.gather(
@@ -33,7 +35,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # Fetch live CVD and price data
+            # === Get Live Data ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -50,7 +52,6 @@ class SpotVsPerpEngine:
 
             # === Signal Logic ===
             signal = "📊 No clear bias"
-
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
             elif bin_perp > 0 and cb_cvd < 0 and bin_spot <= 0:
@@ -62,7 +63,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Terminal Display ===
+            # === Terminal Output ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -72,21 +73,33 @@ class SpotVsPerpEngine:
             print(f"\n🧠 Signal: {signal}")
             print("=============================================================")
 
-            # === Discord Alert Trigger ===
+            # === Discord Alert ===
             if signal != self.last_signal and any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
                 await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
                 self.last_signal = signal
 
-            # === Memory Log for AI Snapshot ===
-            log_snapshot({
-                "coinbase_cvd": cb_cvd,
-                "binance_spot": bin_spot,
-                "binance_perp": bin_perp,
-                "bybit_perp": bybit_cvd,
-                "okx_perp": okx_cvd,
+            # === Snapshot Logging ===
+            snapshot = {
+                "exchange": "multi",
+                "spot_cvd": bin_spot,
+                "perp_cvd": bin_perp,
                 "price": bin_price or cb_price or bybit_price or okx_price,
                 "signal": signal
-            })
+            }
+
+            log_snapshot(snapshot)
+
+            # === DEBUG: Force One-Time Supabase Write Test ===
+            if not self.test_snapshot_sent:
+                write_snapshot_to_supabase({
+                    "exchange": "test",
+                    "spot_cvd": 123.45,
+                    "perp_cvd": 678.90,
+                    "price": 42420.69,
+                    "signal": "🧪 Debug Test Insert",
+                    "confirmed_outcome": "unknown"
+                })
+                self.test_snapshot_sent = True
 
             await asyncio.sleep(5)
 
