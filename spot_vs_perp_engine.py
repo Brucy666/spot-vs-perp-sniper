@@ -1,11 +1,18 @@
 # spot_vs_perp_engine.py
 
 import asyncio
+import os
+from dotenv import load_dotenv
+
 from feeds.coinbase_feed import CoinbaseSpotCVD
 from feeds.binance_feed import BinanceCVDTracker
 from feeds.bybit_feed import BybitCVDTracker
 from feeds.okx_feed import OKXCVDTracker
 
+from utils.discord_alert import send_discord_alert
+from utils.memory_logger import log_snapshot
+
+load_dotenv()
 
 class SpotVsPerpEngine:
     def __init__(self):
@@ -13,6 +20,7 @@ class SpotVsPerpEngine:
         self.binance = BinanceCVDTracker()
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
+        self.last_signal = None
 
     async def run(self):
         await asyncio.gather(
@@ -25,7 +33,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # Get CVD data
+            # Fetch live CVD and price data
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -40,8 +48,9 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # Signal Logic
+            # === Signal Logic ===
             signal = "📊 No clear bias"
+
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
             elif bin_perp > 0 and cb_cvd < 0 and bin_spot <= 0:
@@ -53,7 +62,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # Display Output
+            # === Terminal Display ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -62,6 +71,22 @@ class SpotVsPerpEngine:
             print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
             print(f"\n🧠 Signal: {signal}")
             print("=============================================================")
+
+            # === Discord Alert Trigger ===
+            if signal != self.last_signal and any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
+                await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
+                self.last_signal = signal
+
+            # === Memory Log for AI Snapshot ===
+            log_snapshot({
+                "coinbase_cvd": cb_cvd,
+                "binance_spot": bin_spot,
+                "binance_perp": bin_perp,
+                "bybit_perp": bybit_cvd,
+                "okx_perp": okx_cvd,
+                "price": bin_price or cb_price or bybit_price or okx_price,
+                "signal": signal
+            })
 
             await asyncio.sleep(5)
 
