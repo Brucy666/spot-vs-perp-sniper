@@ -22,7 +22,6 @@ class SpotVsPerpEngine:
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
         self.last_signal = None
-        self.test_snapshot_sent = False  # Prevent duplicate test insert
 
     async def run(self):
         await asyncio.gather(
@@ -35,7 +34,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Get Live Data ===
+            # === Collect CVD data from all sources ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -73,12 +72,12 @@ class SpotVsPerpEngine:
             print(f"\n🧠 Signal: {signal}")
             print("=============================================================")
 
-            # === Discord Alert ===
+            # === Send Discord Alert if signal changed and meaningful ===
             if signal != self.last_signal and any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
                 await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
                 self.last_signal = signal
 
-            # === Snapshot Logging ===
+            # === Prepare and log snapshot ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -89,17 +88,8 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === DEBUG: Force One-Time Supabase Write Test ===
-            if not self.test_snapshot_sent:
-                write_snapshot_to_supabase({
-                    "exchange": "test",
-                    "spot_cvd": 123.45,
-                    "perp_cvd": 678.90,
-                    "price": 42420.69,
-                    "signal": "🧪 Debug Test Insert",
-                    "confirmed_outcome": "unknown"
-                })
-                self.test_snapshot_sent = True
+            if any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
+                write_snapshot_to_supabase(snapshot)
 
             await asyncio.sleep(5)
 
