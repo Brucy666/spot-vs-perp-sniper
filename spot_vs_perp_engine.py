@@ -15,6 +15,7 @@ from utils.discord_alert import send_discord_alert
 from utils.memory_logger import log_snapshot
 from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 from utils.spot_perp_memory_tracker import SpotPerpMemoryTracker
+from utils.spot_perp_scorer import score_spot_perp_confluence
 
 load_dotenv()
 
@@ -42,7 +43,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Get CVD Data ===
+            # === Collect Live CVD ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -57,9 +58,12 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Update Memory Tracker ===
+            # === Memory Tracker & Scoring ===
             self.memory_tracker.update(cb_cvd, bin_spot, bin_perp)
             deltas = self.memory_tracker.get_rolling_deltas()
+            scored = score_spot_perp_confluence(deltas["15m"])
+            confidence = scored["score"]
+            bias_label = scored["label"]
 
             # === Signal Logic ===
             signal = "📊 No clear bias"
@@ -74,7 +78,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Display Terminal Report ===
+            # === Terminal Printout ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -82,12 +86,11 @@ class SpotVsPerpEngine:
             print(f"🟧 Bybit Perp CVD: {bybit_cvd} | Price: {bybit_price}")
             print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
             print(f"\n🧠 Signal: {signal}")
-            print("🔁 15m CVD Δ → CB: {0:.2f}% | SPOT: {1:.2f}% | PERP: {2:.2f}%".format(
-                deltas['15m']['cb_cvd'], deltas['15m']['bin_spot'], deltas['15m']['bin_perp']
-            ))
+            print(f"🔁 15m CVD Δ → CB: {deltas['15m']['cb_cvd']}% | Spot: {deltas['15m']['bin_spot']}% | Perp: {deltas['15m']['bin_perp']}%")
+            print(f"💡 Confidence Score: {confidence}/10 → {bias_label.upper()}")
             print("=============================================================")
 
-            # === Snapshot Construction ===
+            # === Prepare Snapshot ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -98,7 +101,7 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === Smart Alert Gate ===
+            # === Alert + Supabase ===
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
@@ -108,7 +111,12 @@ class SpotVsPerpEngine:
             is_meaningful = any(k in signal for k in ["✅", "🚨", "⚠️", "🟡", "🟣"])
 
             if is_unique and is_cooldown_passed and is_meaningful:
-                await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
+                alert_message = (
+                    f"**SPOT vs PERP ALERT**\n"
+                    f"{signal}\n"
+                    f"🧠 Confidence Score: {confidence}/10 → `{bias_label}`"
+                )
+                await send_discord_alert(alert_message)
                 write_snapshot_to_supabase(snapshot)
                 self.last_signal = signal
                 self.last_signal_time = now
