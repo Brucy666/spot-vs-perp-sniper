@@ -14,6 +14,7 @@ from feeds.okx_feed import OKXCVDTracker
 from utils.discord_alert import send_discord_alert
 from utils.memory_logger import log_snapshot
 from utils.cvd_snapshot_writer import write_snapshot_to_supabase
+from utils.spot_perp_memory_tracker import SpotPerpMemoryTracker
 
 load_dotenv()
 
@@ -23,6 +24,7 @@ class SpotVsPerpEngine:
         self.binance = BinanceCVDTracker()
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
+        self.memory_tracker = SpotPerpMemoryTracker()
 
         self.last_signal = None
         self.last_signal_time = 0
@@ -40,7 +42,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Collect CVD data ===
+            # === Get CVD Data ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -55,7 +57,11 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Generate Signal ===
+            # === Update Memory Tracker ===
+            self.memory_tracker.update(cb_cvd, bin_spot, bin_perp)
+            deltas = self.memory_tracker.get_rolling_deltas()
+
+            # === Signal Logic ===
             signal = "📊 No clear bias"
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -68,7 +74,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Terminal Report ===
+            # === Display Terminal Report ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -76,9 +82,12 @@ class SpotVsPerpEngine:
             print(f"🟧 Bybit Perp CVD: {bybit_cvd} | Price: {bybit_price}")
             print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
             print(f"\n🧠 Signal: {signal}")
+            print("🔁 15m CVD Δ → CB: {0:.2f}% | SPOT: {1:.2f}% | PERP: {2:.2f}%".format(
+                deltas['15m']['cb_cvd'], deltas['15m']['bin_spot'], deltas['15m']['bin_perp']
+            ))
             print("=============================================================")
 
-            # === Create signal snapshot ===
+            # === Snapshot Construction ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -87,10 +96,9 @@ class SpotVsPerpEngine:
                 "signal": signal
             }
 
-            # === Memory log (local) ===
             log_snapshot(snapshot)
 
-            # === Smart Alert Filter ===
+            # === Smart Alert Gate ===
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
@@ -102,9 +110,9 @@ class SpotVsPerpEngine:
             if is_unique and is_cooldown_passed and is_meaningful:
                 await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
                 write_snapshot_to_supabase(snapshot)
+                self.last_signal = signal
                 self.last_signal_time = now
                 self.last_signal_hash = signal_hash
-                self.last_signal = signal
 
             await asyncio.sleep(5)
 
