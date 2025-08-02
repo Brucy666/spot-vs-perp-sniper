@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import time
+import hashlib
 from dotenv import load_dotenv
 
 from feeds.coinbase_feed import CoinbaseSpotCVD
@@ -21,7 +23,11 @@ class SpotVsPerpEngine:
         self.binance = BinanceCVDTracker()
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
+
         self.last_signal = None
+        self.last_signal_time = 0
+        self.last_signal_hash = ""
+        self.signal_cooldown_seconds = 900  # 15 minutes
 
     async def run(self):
         await asyncio.gather(
@@ -34,7 +40,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Collect CVD data from all sources ===
+            # === Collect CVD data ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -49,7 +55,7 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Signal Logic ===
+            # === Generate Signal ===
             signal = "📊 No clear bias"
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -62,7 +68,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Terminal Output ===
+            # === Terminal Report ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -72,12 +78,7 @@ class SpotVsPerpEngine:
             print(f"\n🧠 Signal: {signal}")
             print("=============================================================")
 
-            # === Send Discord Alert if signal changed and meaningful ===
-            if signal != self.last_signal and any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
-                await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
-                self.last_signal = signal
-
-            # === Prepare and log snapshot ===
+            # === Create signal snapshot ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -86,10 +87,24 @@ class SpotVsPerpEngine:
                 "signal": signal
             }
 
+            # === Memory log (local) ===
             log_snapshot(snapshot)
 
-            if any(key in signal for key in ["✅", "🚨", "⚠️", "🟡", "🟣"]):
+            # === Smart Alert Filter ===
+            now = time.time()
+            signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
+            signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
+
+            is_unique = signal_hash != self.last_signal_hash
+            is_cooldown_passed = now - self.last_signal_time > self.signal_cooldown_seconds
+            is_meaningful = any(k in signal for k in ["✅", "🚨", "⚠️", "🟡", "🟣"])
+
+            if is_unique and is_cooldown_passed and is_meaningful:
+                await send_discord_alert(f"**SPOT vs PERP ALERT**\n{signal}")
                 write_snapshot_to_supabase(snapshot)
+                self.last_signal_time = now
+                self.last_signal_hash = signal_hash
+                self.last_signal = signal
 
             await asyncio.sleep(5)
 
