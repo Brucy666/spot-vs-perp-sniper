@@ -16,6 +16,7 @@ from utils.memory_logger import log_snapshot
 from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 from utils.spot_perp_memory_tracker import SpotPerpMemoryTracker
 from utils.spot_perp_scorer import score_spot_perp_confluence
+from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ class SpotVsPerpEngine:
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
         self.memory_tracker = SpotPerpMemoryTracker()
+        self.alert_dispatcher = SpotPerpAlertDispatcher()
 
         self.last_signal = None
         self.last_signal_time = 0
@@ -58,14 +60,14 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Memory Tracker & Scoring ===
+            # === Update Memory & Score ===
             self.memory_tracker.update(cb_cvd, bin_spot, bin_perp)
             deltas = self.memory_tracker.get_rolling_deltas()
             scored = score_spot_perp_confluence(deltas["15m"])
             confidence = scored["score"]
             bias_label = scored["label"]
 
-            # === Signal Logic ===
+            # === Signal Detection ===
             signal = "📊 No clear bias"
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -78,7 +80,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Terminal Printout ===
+            # === Terminal Output ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -86,11 +88,11 @@ class SpotVsPerpEngine:
             print(f"🟧 Bybit Perp CVD: {bybit_cvd} | Price: {bybit_price}")
             print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
             print(f"\n🧠 Signal: {signal}")
-            print(f"🔁 15m CVD Δ → CB: {deltas['15m']['cb_cvd']}% | Spot: {deltas['15m']['bin_spot']}% | Perp: {deltas['15m']['bin_perp']}%")
+            print(f"📉 15m CVD Δ → CB: {deltas['15m']['cb_cvd']}% | Spot: {deltas['15m']['bin_spot']}% | Perp: {deltas['15m']['bin_perp']}%")
             print(f"💡 Confidence Score: {confidence}/10 → {bias_label.upper()}")
             print("=============================================================")
 
-            # === Prepare Snapshot ===
+            # === Snapshot Construction ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -101,7 +103,7 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === Alert + Supabase ===
+            # === Optional: Base Alert Logic (for historical logging/Supabase)
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
@@ -111,16 +113,18 @@ class SpotVsPerpEngine:
             is_meaningful = any(k in signal for k in ["✅", "🚨", "⚠️", "🟡", "🟣"])
 
             if is_unique and is_cooldown_passed and is_meaningful:
-                alert_message = (
-                    f"**SPOT vs PERP ALERT**\n"
-                    f"{signal}\n"
-                    f"🧠 Confidence Score: {confidence}/10 → `{bias_label}`"
-                )
-                await send_discord_alert(alert_message)
                 write_snapshot_to_supabase(snapshot)
                 self.last_signal = signal
                 self.last_signal_time = now
                 self.last_signal_hash = signal_hash
+
+            # === High-Confluence Alert Dispatcher ===
+            await self.alert_dispatcher.maybe_alert(
+                signal=signal,
+                confidence=confidence,
+                label=bias_label,
+                deltas=deltas["15m"]
+            )
 
             await asyncio.sleep(5)
 
