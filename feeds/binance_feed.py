@@ -5,45 +5,50 @@ import websockets
 import json
 
 class BinanceCVDTracker:
-    def __init__(self, symbol="btcusdt"):
-        self.symbol = symbol
+    def __init__(self, spot_symbol="btcusdt", perp_symbol="btcusdt"):
+        self.spot_symbol = spot_symbol
+        self.perp_symbol = perp_symbol
         self.spot_cvd = 0.0
         self.perp_cvd = 0.0
         self.price = None
 
     async def connect(self):
-        uri = (
-            "wss://stream.binance.com:9443/stream?streams="
-            f"{self.symbol}@aggTrade/{self.symbol}usdt@aggTrade"
+        await asyncio.gather(
+            self._connect_spot(),
+            self._connect_perp()
         )
+
+    async def _connect_spot(self):
+        uri = f"wss://stream.binance.com:9443/ws/{self.spot_symbol}@aggTrade"
         async with websockets.connect(uri) as ws:
-            async for message in ws:
-                await self.handle_message(json.loads(message))
+            async for msg in ws:
+                await self._handle_spot_trade(json.loads(msg))
 
-    async def handle_message(self, msg):
-        stream = msg.get("stream", "")
-        data = msg.get("data", {})
+    async def _connect_perp(self):
+        uri = f"wss://fstream.binance.com/ws/{self.perp_symbol}@aggTrade"
+        async with websockets.connect(uri) as ws:
+            async for msg in ws:
+                await self._handle_perp_trade(json.loads(msg))
 
-        if not data:
-            return
-
-        price = float(data["p"])
-        qty = float(data["q"])
-        side = data["m"]  # market maker: True = sell, False = buy
+    async def _handle_spot_trade(self, msg):
+        price = float(msg["p"])
+        qty = float(msg["q"])
+        is_buyer_maker = msg["m"]
         self.price = price
+        if is_buyer_maker:
+            self.spot_cvd -= qty
+        else:
+            self.spot_cvd += qty
 
-        if "@aggTrade" in stream and "usdt@aggTrade" in stream:
-            # Spot stream
-            if side:
-                self.spot_cvd -= qty
-            else:
-                self.spot_cvd += qty
-        elif "usdt" not in stream:
-            # Perp stream (futures default)
-            if side:
-                self.perp_cvd -= qty
-            else:
-                self.perp_cvd += qty
+    async def _handle_perp_trade(self, msg):
+        price = float(msg["p"])
+        qty = float(msg["q"])
+        is_buyer_maker = msg["m"]
+        self.price = price
+        if is_buyer_maker:
+            self.perp_cvd -= qty
+        else:
+            self.perp_cvd += qty
 
     def get_cvd(self):
         return {
