@@ -45,7 +45,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Collect CVD Inputs ===
+            # === Collect live CVD data ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -60,16 +60,16 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Memory Update + Delta Fetch ===
+            # === Memory + Delta ===
             self.memory.update(cb_cvd, bin_spot, bin_perp)
             deltas = self.memory.get_all_deltas()
 
-            # === Score Multi-TF Confluence ===
+            # === Score based on multi-TF flow ===
             scored = score_spot_perp_confluence_multi(deltas)
             confidence = scored["score"]
             bias_label = scored["label"]
 
-            # === Signal Logic ===
+            # === Generate signal ===
             signal = "📊 No clear bias"
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -82,7 +82,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Terminal Printout ===
+            # === Display report ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -95,7 +95,7 @@ class SpotVsPerpEngine:
             print(f"💡 Confidence Score: {confidence}/10 → {bias_label.upper()}")
             print("=============================================================")
 
-            # === Snapshot for Memory / Logging ===
+            # === Save snapshot ===
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -106,7 +106,7 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === Base Logging Logic (Optional DB Insert) ===
+            # === Optional: write to Supabase (signal change detection) ===
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
@@ -121,7 +121,7 @@ class SpotVsPerpEngine:
                 self.last_signal_time = now
                 self.last_signal_hash = signal_hash
 
-            # === Trigger High-Confluence Sniper Alerts ===
+            # === High-confidence alert dispatcher ===
             await self.alert_dispatcher.maybe_alert(
                 signal=signal,
                 confidence=confidence,
@@ -130,66 +130,6 @@ class SpotVsPerpEngine:
             )
 
             await asyncio.sleep(5)
-
-
-if __name__ == "__main__":
-    engine = SpotVsPerpEngine()
-    asyncio.run(engine.run())                signal = "🚨 Perp-led pump — potential trap (Spot not participating)"
-            elif bybit_cvd > 0 and bin_perp < 0:
-                signal = "⚠️ Bybit retail buying while Binance is fading — watch for fakeout"
-            elif okx_cvd < 0 and bin_perp > 0:
-                signal = "🟡 OKX futures selling while Binance perps buying — Asia dump risk"
-            elif cb_cvd > 0 and bin_spot < 0:
-                signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
-
-            # === Terminal Output ===
-            print("\n==================== SPOT vs PERP REPORT ====================")
-            print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
-            print(f"🟦 Binance Spot CVD: {bin_spot}")
-            print(f"🟥 Binance Perp CVD: {bin_perp} | Price: {bin_price}")
-            print(f"🟧 Bybit Perp CVD: {bybit_cvd} | Price: {bybit_price}")
-            print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
-            print(f"\n🧠 Signal: {signal}")
-            print(f"📉 15m CVD Δ → CB: {deltas['15m']['cb_cvd']}% | Spot: {deltas['15m']['bin_spot']}% | Perp: {deltas['15m']['bin_perp']}%")
-            print(f"💡 Confidence Score: {confidence}/10 → {bias_label.upper()}")
-            print("=============================================================")
-
-            # === Snapshot Construction ===
-            snapshot = {
-                "exchange": "multi",
-                "spot_cvd": bin_spot,
-                "perp_cvd": bin_perp,
-                "price": bin_price or cb_price or bybit_price or okx_price,
-                "signal": signal
-            }
-
-            log_snapshot(snapshot)
-
-            # === Optional: Base Alert Logic (for historical logging/Supabase)
-            now = time.time()
-            signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
-            signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
-
-            is_unique = signal_hash != self.last_signal_hash
-            is_cooldown_passed = now - self.last_signal_time > self.signal_cooldown_seconds
-            is_meaningful = any(k in signal for k in ["✅", "🚨", "⚠️", "🟡", "🟣"])
-
-            if is_unique and is_cooldown_passed and is_meaningful:
-                write_snapshot_to_supabase(snapshot)
-                self.last_signal = signal
-                self.last_signal_time = now
-                self.last_signal_hash = signal_hash
-
-            # === High-Confluence Alert Dispatcher ===
-            await self.alert_dispatcher.maybe_alert(
-                signal=signal,
-                confidence=confidence,
-                label=bias_label,
-                deltas=deltas["15m"]
-            )
-
-            await asyncio.sleep(5)
-
 
 if __name__ == "__main__":
     engine = SpotVsPerpEngine()
