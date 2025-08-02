@@ -17,6 +17,7 @@ from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.spot_perp_scorer import score_spot_perp_confluence_multi
+from sniper_executor import SniperExecutor
 
 load_dotenv()
 
@@ -26,8 +27,10 @@ class SpotVsPerpEngine:
         self.binance = BinanceCVDTracker()
         self.bybit = BybitCVDTracker()
         self.okx = OKXCVDTracker()
+
         self.memory = MultiTFMemory()
         self.alert_dispatcher = SpotPerpAlertDispatcher()
+        self.executor = SniperExecutor()
 
         self.last_signal = None
         self.last_signal_time = 0
@@ -45,7 +48,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Collect live CVD data ===
+            # === Collect data ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -60,11 +63,9 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Memory + Delta ===
+            # === Update memory and score ===
             self.memory.update(cb_cvd, bin_spot, bin_perp)
             deltas = self.memory.get_all_deltas()
-
-            # === Score based on multi-TF flow ===
             scored = score_spot_perp_confluence_multi(deltas)
             confidence = scored["score"]
             bias_label = scored["label"]
@@ -82,7 +83,7 @@ class SpotVsPerpEngine:
             elif cb_cvd > 0 and bin_spot < 0:
                 signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-            # === Display report ===
+            # === Display ===
             print("\n==================== SPOT vs PERP REPORT ====================")
             print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
             print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -95,7 +96,7 @@ class SpotVsPerpEngine:
             print(f"💡 Confidence Score: {confidence}/10 → {bias_label.upper()}")
             print("=============================================================")
 
-            # === Save snapshot ===
+            # === Snapshot log
             snapshot = {
                 "exchange": "multi",
                 "spot_cvd": bin_spot,
@@ -106,7 +107,7 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === Optional: write to Supabase (signal change detection) ===
+            # === Database log check
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
@@ -121,7 +122,7 @@ class SpotVsPerpEngine:
                 self.last_signal_time = now
                 self.last_signal_hash = signal_hash
 
-            # === High-confidence alert dispatcher ===
+            # === Sniper Alert Trigger
             await self.alert_dispatcher.maybe_alert(
                 signal=signal,
                 confidence=confidence,
@@ -129,7 +130,12 @@ class SpotVsPerpEngine:
                 deltas=deltas["15m"]
             )
 
+            # === Sniper Execution Trigger
+            if self.executor.should_execute(confidence, bias_label):
+                self.executor.execute(signal, confidence, bin_price or cb_price, bias_label)
+
             await asyncio.sleep(5)
+
 
 if __name__ == "__main__":
     engine = SpotVsPerpEngine()
