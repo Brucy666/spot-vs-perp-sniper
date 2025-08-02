@@ -45,7 +45,7 @@ class SpotVsPerpEngine:
 
     async def monitor(self):
         while True:
-            # === Get CVD Data ===
+            # === Collect CVD Inputs ===
             cb_cvd = self.coinbase.get_cvd()
             cb_price = self.coinbase.get_last_price()
 
@@ -60,15 +60,16 @@ class SpotVsPerpEngine:
             okx_cvd = self.okx.get_cvd()
             okx_price = self.okx.get_price()
 
-            # === Memory Update + Scoring ===
+            # === Memory Update + Delta Fetch ===
             self.memory.update(cb_cvd, bin_spot, bin_perp)
             deltas = self.memory.get_all_deltas()
 
+            # === Score Multi-TF Confluence ===
             scored = score_spot_perp_confluence_multi(deltas)
             confidence = scored["score"]
             bias_label = scored["label"]
 
-            # === Signal Generation ===
+            # === Signal Detection ===
             signal = "📊 No clear bias"
             if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                 signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -105,7 +106,7 @@ class SpotVsPerpEngine:
 
             log_snapshot(snapshot)
 
-            # === Optional DB Logging (Only if new signal + meaningful) ===
+            # === Optional DB Logging ===
             now = time.time()
             signal_signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
             signal_hash = hashlib.sha256(signal_signature.encode()).hexdigest()
