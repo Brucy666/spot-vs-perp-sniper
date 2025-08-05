@@ -1,4 +1,4 @@
-# swing_vs_perp_engine.py (wired with scorer_swing.py)
+# swing_vs_perp_engine.py (updated with mode="swing" for dispatcher)
 
 import asyncio
 import os
@@ -60,8 +60,8 @@ class SwingVsPerpEngine:
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
 
-                # Require alignment of 15m, 1h, 4h
-                required_tfs = ["15m", "1h", "4h"]
+                # Require alignment of 15m, 30m, 1h, 4h
+                required_tfs = ["15m", "30m", "1h", "4h"]
                 if not all(tf in deltas for tf in required_tfs):
                     await asyncio.sleep(30)
                     continue
@@ -95,7 +95,7 @@ class SwingVsPerpEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal, confidence, label, deltas["15m"]
+                        signal, confidence, label, deltas["15m"], mode="swing"
                     )
 
                     if self.executor.should_execute(confidence, label):
