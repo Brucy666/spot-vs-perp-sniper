@@ -1,4 +1,4 @@
-# swing_vs_perp_engine.py (polished + cooldown + 30m safety check)
+# swing_vs_perp_engine.py
 
 import asyncio
 import os
@@ -15,6 +15,7 @@ from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
+from volume_fetcher import fetch_all_volume
 from scorer_swing import score_swing_confluence
 
 load_dotenv()
@@ -27,7 +28,7 @@ class SwingVsPerpEngine:
         self.okx = OKXCVDTracker()
 
         self.memory = MultiTFMemory()
-        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1800)  # 30 min
+        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1800)
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
@@ -61,25 +62,26 @@ class SwingVsPerpEngine:
                     await asyncio.sleep(30)
                     continue
 
-                # Update memory and score
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_swing_confluence(deltas)
                 confidence = scored["score"]
                 label = scored["label"]
 
+                # 🔊 Fetch and print live volume
+                volume_data = fetch_all_volume()
+                
                 print("\n==================== SWING BIAS REPORT ====================")
                 for tf in ["15m", "30m", "1h", "4h"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
                 print(f"💡 Swing Bias: {label.upper()} | Confidence: {confidence}/10")
+                print(f"🔊 Volume Snapshot: {volume_data}")
                 print("==========================================================")
 
-                # Must have 30m data populated
                 core_tf = deltas.get("30m")
                 if not core_tf:
-                    print("[SWING WARNING] 30m data missing — waiting for more memory...")
                     await asyncio.sleep(30)
                     continue
 
