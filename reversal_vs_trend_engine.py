@@ -1,4 +1,4 @@
-# reversal_vs_trend_engine.py
+# reversal_vs_trend_engine.py (with volume fetch + logs)
 
 import asyncio
 import os
@@ -15,7 +15,8 @@ from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
-from scorer_reversal import score_reversal_confluence  # ✅ FIXED import
+from scorer_reversal import score_reversal_confluence
+from volume_fetcher import fetch_all_volume
 
 load_dotenv()
 
@@ -27,7 +28,7 @@ class ReversalVsTrendEngine:
         self.okx = OKXCVDTracker()
 
         self.memory = MultiTFMemory()
-        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1200)  # 20m cooldown
+        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1200)
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
@@ -53,14 +54,11 @@ class ReversalVsTrendEngine:
                 bin_price = bin_data["price"]
 
                 bybit_cvd = self.bybit.get_cvd()
-                bybit_price = self.bybit.get_price()
-
                 okx_cvd = self.okx.get_cvd()
-                okx_price = self.okx.get_price()
 
-                spot_price = bin_price or cb_price or bybit_price or okx_price
+                spot_price = bin_price or cb_price
                 if not spot_price:
-                    print("[REVERSAL ERROR] No spot price available, skipping.")
+                    print("[REVERSAL ERROR] No spot price available, skipping...")
                     await asyncio.sleep(30)
                     continue
 
@@ -70,13 +68,17 @@ class ReversalVsTrendEngine:
                 confidence = scored["score"]
                 label = scored["label"]
 
+                # Fetch and log live volume
+                volume_data = fetch_all_volume()
+                print("🔊 Volume Snapshot:", volume_data)
+
                 print("\n==================== REVERSAL BIAS REPORT ====================")
                 for tf in ["5m", "15m", "30m"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"💡 Reversal Bias: {label.upper()} | Confidence: {confidence}/10")
-                print("===============================================================")
+                print(f"🔁 Reversal Bias: {label.upper()} | Confidence: {confidence}/10")
+                print("==============================================================")
 
                 now = time.time()
                 sig_key = f"{label}-{confidence}-{int(spot_price)}"
