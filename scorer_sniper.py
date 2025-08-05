@@ -1,13 +1,10 @@
-# scorer_sniper.py
-
-# This file handles scoring logic for sniper bot (1m, 3m, 5m, 15m)
+# scorer_sniper.py (updated for 1m, 3m, 5m only)
 
 def score_spot_perp_confluence_sniper(deltas):
     tf_weights = {
-        "1m":  0.3,
-        "3m":  0.3,
-        "5m":  0.2,
-        "15m": 0.2
+        "1m":  0.4,
+        "3m":  0.35,
+        "5m":  0.25
     }
 
     total_score = 0
