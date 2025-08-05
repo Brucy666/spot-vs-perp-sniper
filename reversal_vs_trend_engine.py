@@ -1,4 +1,4 @@
- # reversal_vs_trend_engine.py (with volume scoring integration)
+# reversal_vs_trend_engine.py
 
 import asyncio
 import os
@@ -13,13 +13,15 @@ from feeds.okx_feed import OKXCVDTracker
 
 from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
-from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
+from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
+
+from scorer_reversal import score_reversal_confluence
 from volume_fetcher import fetch_all_volume
 from volume_scorer import score_volume_bias
-from scorer_reversal import score_reversal_confluence
 
 load_dotenv()
+
 
 class ReversalVsTrendEngine:
     def __init__(self):
@@ -29,7 +31,7 @@ class ReversalVsTrendEngine:
         self.okx = OKXCVDTracker()
 
         self.memory = MultiTFMemory()
-        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1200)
+        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=900)
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
@@ -59,8 +61,8 @@ class ReversalVsTrendEngine:
 
                 spot_price = bin_price or cb_price or bybit_price or okx_price
                 if not spot_price:
-                    print("[REVERSAL ERROR] No spot price available, skipping...")
-                    await asyncio.sleep(30)
+                    print("[REVERSAL ERROR] No valid spot price found, skipping...")
+                    await asyncio.sleep(15)
                     continue
 
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
@@ -69,13 +71,9 @@ class ReversalVsTrendEngine:
                 cvd_score = scored["score"]
                 label = scored["label"]
 
-                # Volume
                 volume_data = fetch_all_volume()
-                volume_result = score_volume_confluence(volume_data)
-                volume_score = volume_result["volume_score"]
-                volume_label = volume_result["volume_label"]
+                volume_score, volume_label = score_volume_bias(volume_data)
 
-                # Final score = blend CVD + volume
                 final_score = round((cvd_score * 0.7) + (volume_score * 0.3), 2)
 
                 print("\n==================== REVERSAL BIAS REPORT ====================")
@@ -83,13 +81,13 @@ class ReversalVsTrendEngine:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"💡 Reversal Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
+                print(f"🔄 Reversal Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
                 print("🔊 Volume Snapshot:", volume_data)
-                print("================================================================")
+                print("==============================================================")
 
                 core_tf = deltas.get("15m")
                 if not core_tf:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(15)
                     continue
 
                 now = time.time()
@@ -125,7 +123,7 @@ class ReversalVsTrendEngine:
             except Exception as e:
                 print(f"[ERROR] Reversal Engine Error: {e}")
 
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
 
 
 if __name__ == "__main__":
