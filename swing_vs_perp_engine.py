@@ -1,6 +1,7 @@
-# swing_vs_perp_engine.py
+# swing_vs_perp_engine.py (rewritten to use 15m/1h/4h logic only)
 
 import asyncio
+import os
 import time
 import hashlib
 from dotenv import load_dotenv
@@ -32,7 +33,7 @@ class SwingVsPerpEngine:
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
-        self.cooldown_seconds = 1800  # 30 minutes
+        self.cooldown = 1800  # 30 minutes
 
     async def run(self):
         await asyncio.gather(
@@ -46,7 +47,6 @@ class SwingVsPerpEngine:
     async def monitor(self):
         while True:
             try:
-                # === Collect Feed Data ===
                 cb_cvd = self.coinbase.get_cvd()
                 cb_price = self.coinbase.get_last_price()
 
@@ -55,69 +55,57 @@ class SwingVsPerpEngine:
                 bin_perp = bin_data["perp"]
                 bin_price = bin_data["price"]
 
-                bybit_cvd = self.bybit.get_cvd()
-                bybit_price = self.bybit.get_price()
+                spot_price = bin_price or cb_price
 
-                okx_cvd = self.okx.get_cvd()
-                okx_price = self.okx.get_price()
-
-                spot_price = bin_price or cb_price or bybit_price or okx_price
-                now = time.time()
-
-                # === Update Memory + Score ===
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
+
+                # Require alignment of 15m, 1h, 4h
+                required_tfs = ["15m", "1h", "4h"]
+                if not all(tf in deltas for tf in required_tfs):
+                    await asyncio.sleep(30)
+                    continue
+
                 scored = score_spot_perp_confluence_multi(deltas)
-
                 confidence = scored["score"]
-                bias_label = scored["label"]
+                label = scored["label"]
+                signal = f"SWING ALIGNMENT | Confidence {confidence}/10 → {label.upper()}"
 
-                signal_text = f"SWING BIAS | Confidence {confidence}/10 → {bias_label.upper()}"
+                print("\n==================== SWING BIAS REPORT ====================")
+                for tf in required_tfs:
+                    d = deltas[tf]
+                    print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
+                print(f"💡 Swing Bias: {label.upper()} | Confidence: {confidence}/10")
+                print("===========================================================")
 
-                # === Print Snapshot to Terminal ===
-                print("\n==================== SWING vs PERP SNAPSHOT ====================")
-                for tf in ["15m", "1h", "4h"]:
-                    if tf in deltas:
-                        d = deltas[tf]
-                        print(f"🕒 {tf.upper()} Δ → CB: {d['cb_cvd']}% | SPOT: {d['bin_spot']}% | PERP: {d['bin_perp']}%")
-                print(f"💡 Final Score: {confidence}/10 → {bias_label}")
-                print("===============================================================\n")
+                now = time.time()
+                sig_key = f"{signal}-{label}-{int(spot_price)}"
+                sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                # === Confirm Multi-TF Alignment ===
-                if all(tf in deltas for tf in ["15m", "1h", "4h"]) and confidence >= 6 and bias_label != "neutral":
-                    signal_key = f"{bias_label}-{confidence}-{int(spot_price)}"
-                    signal_hash = hashlib.sha256(signal_key.encode()).hexdigest()
+                if label != "neutral" and confidence >= 6 and (now - self.last_signal_time > self.cooldown) and sig_hash != self.last_signal_hash:
+                    log_sniper_alert({
+                        "signal": signal,
+                        "direction": "LONG" if label == "spot_dominant" else "SHORT",
+                        "confidence": confidence,
+                        "label": label,
+                        "cb_cvd": deltas["15m"]["cb_cvd"],
+                        "bin_spot": deltas["15m"]["bin_spot"],
+                        "bin_perp": deltas["15m"]["bin_perp"],
+                        "price": spot_price
+                    })
 
-                    if signal_hash != self.last_signal_hash and (now - self.last_signal_time > self.cooldown_seconds):
-                        direction = "LONG" if bias_label == "spot_dominant" else "SHORT"
+                    await self.alert_dispatcher.maybe_alert(
+                        signal, confidence, label, deltas["15m"]
+                    )
 
-                        alert_data = {
-                            "signal": signal_text,
-                            "direction": direction,
-                            "confidence": confidence,
-                            "label": bias_label,
-                            "cb_cvd": deltas["15m"]["cb_cvd"],
-                            "bin_spot": deltas["15m"]["bin_spot"],
-                            "bin_perp": deltas["15m"]["bin_perp"],
-                            "price": spot_price
-                        }
+                    if self.executor.should_execute(confidence, label):
+                        self.executor.execute(signal, confidence, spot_price, label)
 
-                        log_sniper_alert(alert_data)
-                        await self.alert_dispatcher.maybe_alert(
-                            signal_text,
-                            confidence,
-                            bias_label,
-                            deltas["15m"]
-                        )
-
-                        if self.executor.should_execute(confidence, bias_label):
-                            self.executor.execute(signal_text, confidence, spot_price, bias_label)
-
-                        self.last_signal_hash = signal_hash
-                        self.last_signal_time = now
+                    self.last_signal_time = now
+                    self.last_signal_hash = sig_hash
 
             except Exception as e:
-                print(f"[ERROR] Swing Monitor Failed: {e}")
+                print(f"[ERROR] Swing Engine Error: {e}")
 
             await asyncio.sleep(30)
 
