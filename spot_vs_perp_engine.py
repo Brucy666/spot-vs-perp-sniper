@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py (rewritten with focused sniper TF logic)
+# spot_vs_perp_engine.py (now passing mode="sniper" for dispatcher)
 
 import asyncio
 import os
@@ -123,7 +123,7 @@ class SpotVsPerpEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal, confidence, label, deltas["3m"]
+                        signal, confidence, label, deltas["3m"], mode="sniper"
                     )
 
                     if self.executor.should_execute(confidence, label):
