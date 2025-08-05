@@ -17,7 +17,7 @@ from utils.sniper_alert_logger import log_sniper_alert
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 
 from scorer_reversal import score_reversal_confluence
-from volume_fetcher import fetch_all_volume
+from utils.volume_fetcher import fetch_all_volume
 from volume_scorer import score_volume_bias
 
 load_dotenv()
