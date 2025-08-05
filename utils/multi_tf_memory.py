@@ -5,57 +5,47 @@ from collections import deque
 
 class MultiTFMemory:
     def __init__(self):
-        self.timeframes = {
-            "1m": 60,
-            "3m": 3 * 60,
-            "5m": 5 * 60,
-            "15m": 15 * 60,
-            "1h": 60 * 60,
-            "4h": 4 * 60 * 60
-        }
-        self.memory = {
-            tf: deque() for tf in self.timeframes
+        self.windows = {
+            "1m":   {"max_age": 60,      "memory": deque()},
+            "3m":   {"max_age": 3 * 60,  "memory": deque()},
+            "5m":   {"max_age": 5 * 60,  "memory": deque()},
+            "15m":  {"max_age": 15 * 60, "memory": deque()},
+            "1h":   {"max_age": 60 * 60, "memory": deque()},
+            "4h":   {"max_age": 4 * 60 * 60, "memory": deque()}
         }
 
     def update(self, cb_cvd, bin_spot, bin_perp):
         now = time.time()
-        snapshot = (now, cb_cvd, bin_spot, bin_perp)
+        datapoint = (now, cb_cvd, bin_spot, bin_perp)
 
-        for tf in self.timeframes:
-            self.memory[tf].append(snapshot)
-            self._prune_old(tf, now)
+        for tf in self.windows:
+            self.windows[tf]["memory"].append(datapoint)
+            self._cleanup_old(tf, now)
 
-    def _prune_old(self, tf, now):
-        max_age = self.timeframes[tf]
-        tf_memory = self.memory[tf]
-        while tf_memory and (now - tf_memory[0][0]) > max_age:
-            tf_memory.popleft()
+    def _cleanup_old(self, tf, now):
+        memory = self.windows[tf]["memory"]
+        max_age = self.windows[tf]["max_age"]
+        while memory and now - memory[0][0] > max_age:
+            memory.popleft()
 
     def get_all_deltas(self):
-        return {
-            tf: self._compute_deltas(self.memory[tf])
-            for tf in self.memory
-        }
+        deltas = {}
+        for tf in self.windows:
+            deltas[tf] = self._compute_delta(self.windows[tf]["memory"])
+        return deltas
 
-    def _compute_deltas(self, data):
-        if len(data) < 2:
-            return {
-                "cb_cvd": 0,
-                "bin_spot": 0,
-                "bin_perp": 0
-            }
+    def _compute_delta(self, memory):
+        if len(memory) < 2:
+            return {"cb_cvd": 0, "bin_spot": 0, "bin_perp": 0}
 
-        _, cb_start, spot_start, perp_start = data[0]
-        _, cb_end, spot_end, perp_end = data[-1]
+        start = memory[0]
+        end = memory[-1]
 
-        def pct_change(start, end):
-            try:
-                return round(((end - start) / abs(start)) * 100, 2) if start != 0 else 0
-            except:
-                return 0
+        def percent_change(start_val, end_val):
+            return round(((end_val - start_val) / abs(start_val)) * 100, 2) if start_val != 0 else 0
 
         return {
-            "cb_cvd": pct_change(cb_start, cb_end),
-            "bin_spot": pct_change(spot_start, spot_end),
-            "bin_perp": pct_change(perp_start, perp_end)
+            "cb_cvd":   percent_change(start[1], end[1]),
+            "bin_spot": percent_change(start[2], end[2]),
+            "bin_perp": percent_change(start[3], end[3])
         }
