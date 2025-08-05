@@ -1,4 +1,4 @@
-# reversal_vs_trend_engine.py (wired with scorer_reversal.py)
+# reversal_vs_trend_engine.py (updated with mode="reversal" for dispatcher)
 
 import asyncio
 import os
@@ -66,7 +66,7 @@ class ReversalVsTrendEngine:
                 signal = f"REVERSAL TRAP | Confidence {confidence}/10 → {label.upper()}"
 
                 print("\n==================== REVERSAL TRAP REPORT ====================")
-                for tf in ["1m", "3m", "15m", "1h"]:
+                for tf in ["1h", "4h", "8h", "12h", "1d"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
@@ -83,14 +83,14 @@ class ReversalVsTrendEngine:
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
                         "confidence": confidence,
                         "label": label,
-                        "cb_cvd": deltas["1m"]["cb_cvd"],
-                        "bin_spot": deltas["1m"]["bin_spot"],
-                        "bin_perp": deltas["1m"]["bin_perp"],
+                        "cb_cvd": deltas["1h"]["cb_cvd"],
+                        "bin_spot": deltas["1h"]["bin_spot"],
+                        "bin_perp": deltas["1h"]["bin_perp"],
                         "price": spot_price
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal, confidence, label, deltas["1m"]
+                        signal, confidence, label, deltas["1h"], mode="reversal"
                     )
 
                     if self.executor.should_execute(confidence, label):
