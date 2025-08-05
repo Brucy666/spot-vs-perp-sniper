@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py (with volume scoring integrated)
+# spot_vs_perp_engine.py (patched to unpack volume tuple)
 
 import asyncio
 import os
@@ -13,13 +13,11 @@ from feeds.okx_feed import OKXCVDTracker
 
 from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
-from utils.spot_perp_scorer import score_spot_perp_confluence_multi
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
-from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 from utils.sniper_alert_logger import log_sniper_alert
-from volume_fetcher import fetch_all_volume
+from utils.volume_fetcher import fetch_all_volume
 from volume_scorer import score_volume_bias
-from sniper_executor import SniperExecutor
+from scorer_sniper import score_sniper_confluence
 
 load_dotenv()
 
@@ -31,12 +29,10 @@ class SpotVsPerpEngine:
         self.okx = OKXCVDTracker()
 
         self.memory = MultiTFMemory()
-        self.alert_dispatcher = SpotPerpAlertDispatcher()
-        self.executor = SniperExecutor()
+        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=300)
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
-        self.signal_cooldown = 300
 
     async def run(self):
         await asyncio.gather(
@@ -62,35 +58,20 @@ class SpotVsPerpEngine:
                 okx_cvd = self.okx.get_cvd()
 
                 spot_price = bin_price or cb_price
+                if not spot_price:
+                    print("[SNIPER ERROR] No valid price found, skipping...")
+                    await asyncio.sleep(5)
+                    continue
 
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
-                cvd_score_data = score_spot_perp_confluence_multi(deltas)
-                cvd_score = cvd_score_data["score"]
-                label = cvd_score_data["label"]
+                scored = score_sniper_confluence(deltas)
+                confidence = scored["score"]
+                label = scored["label"]
 
-                # === Volume Logic ===
+                # Volume snapshot and scoring
                 volume_data = fetch_all_volume()
-                volume_score_data = score_volume_bias(volume_data)
-                volume_score = volume_score_data["score"]
-                volume_label = volume_score_data["label"]
-                print("🔊 Volume Snapshot:", volume_data)
-                print("🎯 Volume Bias:", volume_label, "| Score:", volume_score)
-
-                # === Final Score Blend ===
-                final_score = round((cvd_score * 0.7) + (volume_score * 0.3), 2)
-
-                signal = "📊 No clear bias"
-                if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
-                    signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
-                elif bin_perp > 0 and cb_cvd < 0 and bin_spot <= 0:
-                    signal = "🚨 Perp-led pump — potential trap (Spot not participating)"
-                elif bybit_cvd > 0 and bin_perp < 0:
-                    signal = "⚠️ Bybit retail buying while Binance is fading — watch for fakeout"
-                elif okx_cvd < 0 and bin_perp > 0:
-                    signal = "🟡 OKX futures selling while Binance perps buying — Asia dump risk"
-                elif cb_cvd > 0 and bin_spot < 0:
-                    signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
+                vol_score, vol_label = score_volume_bias(volume_data)
 
                 print("\n==================== SPOT SNIPER REPORT ====================")
                 print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
@@ -98,13 +79,12 @@ class SpotVsPerpEngine:
                 print(f"🟥 Binance Perp CVD: {bin_perp} | Price: {bin_price}")
                 print(f"🟧 Bybit Perp CVD: {bybit_cvd}")
                 print(f"🟪 OKX Futures CVD: {okx_cvd}")
-                print("🔊 Volume Snapshot:", volume_data)
-                print("🎯 Volume Bias:", volume_label, "| Score:", volume_score)
                 for tf in ["1m", "3m", "5m"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"💡 Final Score: {final_score}/10 → {label.upper()} (CVD {cvd_score}/10, Volume {volume_score}/10)")
+                print(f"🔊 Volume Bias: {vol_label.upper()} | Score: {vol_score}/10")
+                print(f"💡 Confidence Score: {confidence}/10 → {label.upper()}")
                 print("===========================================================")
 
                 snapshot = {
@@ -112,23 +92,23 @@ class SpotVsPerpEngine:
                     "spot_cvd": bin_spot,
                     "perp_cvd": bin_perp,
                     "price": spot_price,
-                    "signal": signal
+                    "signal": f"{label.upper()}"
                 }
-                log_snapshot(snapshot)
 
                 now = time.time()
-                sig_key = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
+                sig_key = f"{label}-{confidence}-{int(spot_price)}"
                 sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > self.signal_cooldown):
-                    write_snapshot_to_supabase(snapshot)
+                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > 300):
                     self.last_signal_time = now
                     self.last_signal_hash = sig_hash
 
+                    signal_text = f"Brucy Bonus💥 SPOT SIGNAL | Confidence {confidence}/10 → {label} | Volume {vol_score}/10 → {vol_label}"
+
                     log_sniper_alert({
-                        "signal": signal,
+                        "signal": signal_text,
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
-                        "confidence": final_score,
+                        "confidence": confidence,
                         "label": label,
                         "cb_cvd": deltas["3m"]["cb_cvd"],
                         "bin_spot": deltas["3m"]["bin_spot"],
@@ -137,16 +117,8 @@ class SpotVsPerpEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text=signal,
-                        confidence=final_score,
-                        label=label,
-                        deltas=deltas["3m"],
-                        cvd_score=cvd_score,
-                        volume_score=volume_score
+                        signal_text, confidence, label, deltas["3m"]
                     )
-
-                    if self.executor.should_execute(final_score, label):
-                        self.executor.execute(signal, final_score, spot_price, label)
 
             except Exception as e:
                 print(f"[ERROR] Spot Sniper Engine Error: {e}")
