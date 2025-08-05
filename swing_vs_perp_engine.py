@@ -1,4 +1,4 @@
-# swing_vs_perp_engine.py (fixed NoneType price bug)
+# swing_vs_perp_engine.py (polished + cooldown + 30m safety check)
 
 import asyncio
 import os
@@ -27,7 +27,7 @@ class SwingVsPerpEngine:
         self.okx = OKXCVDTracker()
 
         self.memory = MultiTFMemory()
-        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1800)
+        self.alert_dispatcher = SpotPerpAlertDispatcher(cooldown_seconds=1800)  # 30 min
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
@@ -52,10 +52,7 @@ class SwingVsPerpEngine:
                 bin_perp = bin_data["perp"]
                 bin_price = bin_data["price"]
 
-                bybit_cvd = self.bybit.get_cvd()
                 bybit_price = self.bybit.get_price()
-
-                okx_cvd = self.okx.get_cvd()
                 okx_price = self.okx.get_price()
 
                 spot_price = bin_price or cb_price or bybit_price or okx_price
@@ -64,6 +61,7 @@ class SwingVsPerpEngine:
                     await asyncio.sleep(30)
                     continue
 
+                # Update memory and score
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_swing_confluence(deltas)
@@ -78,11 +76,21 @@ class SwingVsPerpEngine:
                 print(f"💡 Swing Bias: {label.upper()} | Confidence: {confidence}/10")
                 print("==========================================================")
 
+                # Must have 30m data populated
+                core_tf = deltas.get("30m")
+                if not core_tf:
+                    print("[SWING WARNING] 30m data missing — waiting for more memory...")
+                    await asyncio.sleep(30)
+                    continue
+
                 now = time.time()
                 sig_key = f"{label}-{confidence}-{int(spot_price)}"
                 sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > 1800):
+                is_unique = sig_hash != self.last_signal_hash
+                is_cooldown_ok = (now - self.last_signal_time) > self.alert_dispatcher.cooldown_seconds
+
+                if is_unique and is_cooldown_ok:
                     self.last_signal_time = now
                     self.last_signal_hash = sig_hash
 
@@ -93,14 +101,14 @@ class SwingVsPerpEngine:
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
                         "confidence": confidence,
                         "label": label,
-                        "cb_cvd": deltas["30m"]["cb_cvd"],
-                        "bin_spot": deltas["30m"]["bin_spot"],
-                        "bin_perp": deltas["30m"]["bin_perp"],
+                        "cb_cvd": core_tf["cb_cvd"],
+                        "bin_spot": core_tf["bin_spot"],
+                        "bin_perp": core_tf["bin_perp"],
                         "price": spot_price
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text, confidence, label, deltas["30m"]
+                        signal_text, confidence, label, core_tf
                     )
 
             except Exception as e:
