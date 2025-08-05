@@ -1,47 +1,63 @@
-# scorer_sniper.py (updated for 1m, 3m, 5m only)
+# scorer_sniper.py
 
-def score_spot_perp_confluence_sniper(deltas):
-    tf_weights = {
-        "1m":  0.4,
-        "3m":  0.35,
-        "5m":  0.25
-    }
+def score_sniper_confluence(deltas):
+    """
+    Sniper scoring engine.
+    Evaluates short-term timeframes (1m, 3m, 5m) for aggressive confluence.
+    Returns:
+        {
+            "score": float,
+            "label": "spot_dominant" | "perp_dominant" | "neutral"
+        }
+    """
+    try:
+        tf_weights = {
+            "1m": 1.5,
+            "3m": 2.0,
+            "5m": 2.5
+        }
 
-    total_score = 0
-    total_weight = 0
-    spot_dominant = 0
-    perp_dominant = 0
+        score = 0
+        total_weight = 0
 
-    for tf, weight in tf_weights.items():
-        if tf not in deltas:
-            continue
+        for tf, weight in tf_weights.items():
+            tf_delta = deltas.get(tf)
+            if not tf_delta:
+                continue
 
-        cb = deltas[tf]["cb_cvd"]
-        spot = deltas[tf]["bin_spot"]
-        perp = deltas[tf]["bin_perp"]
+            cb = tf_delta["cb_cvd"]
+            spot = tf_delta["bin_spot"]
+            perp = tf_delta["bin_perp"]
 
-        total_weight += weight
-        signal_strength = 0
+            # Spot-led sniper
+            if cb > 0 and spot > 0 and perp < 0:
+                score += 1.5 * weight
+            elif cb > 0 and spot > 0:
+                score += 1.0 * weight
+            elif cb < 0 and spot < 0:
+                score -= 1.0 * weight
+            elif perp > 0 and cb < 0 and spot <= 0:
+                score -= 1.5 * weight
 
-        if cb > 0 and spot > 0 and perp < 0:
-            signal_strength = 10
-            spot_dominant += 1
-        elif perp > 0 and spot <= 0 and cb <= 0:
-            signal_strength = -10
-            perp_dominant += 1
+            total_weight += weight
 
-        total_score += signal_strength * weight
+        final_score = round(score / total_weight * 10, 2) if total_weight else 0
 
-    normalized_score = round(abs(total_score) / total_weight, 1) if total_weight > 0 else 0
+        if final_score > 3:
+            label = "spot_dominant"
+        elif final_score < -3:
+            label = "perp_dominant"
+        else:
+            label = "neutral"
 
-    if spot_dominant >= 2:
-        label = "spot_dominant"
-    elif perp_dominant >= 2:
-        label = "perp_dominant"
-    else:
-        label = "neutral"
+        return {
+            "score": final_score,
+            "label": label
+        }
 
-    return {
-        "score": normalized_score,
-        "label": label
-    }
+    except Exception as e:
+        print("[X] Error in score_sniper_confluence:", e)
+        return {
+            "score": 0,
+            "label": "neutral"
+        }
