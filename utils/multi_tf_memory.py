@@ -6,10 +6,12 @@ from collections import deque
 class MultiTFMemory:
     def __init__(self):
         self.timeframes = {
+            "1m": 60,
+            "3m": 3 * 60,
             "5m": 5 * 60,
             "15m": 15 * 60,
             "1h": 60 * 60,
-            "4h": 4 * 60 * 60  # Optional: can remove if not needed
+            "4h": 4 * 60 * 60
         }
         self.memory = {
             tf: deque() for tf in self.timeframes
