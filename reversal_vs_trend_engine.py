@@ -19,6 +19,8 @@ from sniper_executor import SniperExecutor
 
 load_dotenv()
 
+REVERSAL_WEBHOOK = "https://discord.com/api/webhooks/1402266172019445761/dfcaGtwuIT_qPQs-pd5lBY8UVT02GMNKLMoOTCkFO8oNMLhtOA0kO6ErvsYYXl1IWXZJ"
+
 class ReversalVsTrendEngine:
     def __init__(self):
         self.coinbase = CoinbaseSpotCVD()
@@ -32,7 +34,7 @@ class ReversalVsTrendEngine:
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
-        self.cooldown_seconds = 300  # 5 min for reversals
+        self.cooldown_seconds = 300
 
     async def run(self):
         await asyncio.gather(
@@ -77,12 +79,10 @@ class ReversalVsTrendEngine:
                 direction = None
                 reason = ""
 
-                # Long trap? Short TF bearish, but macro bullish
                 if scored["label"] == "spot_dominant" and short_tf["bin_perp"] > 0 and short_tf["cb_cvd"] < 0:
                     direction = "LONG"
                     reason = "🐍 Spot macro strong, but perps shorting into it (trap long setup)"
 
-                # Short trap? Short TF bullish, but macro bearish
                 elif scored["label"] == "perp_dominant" and short_tf["bin_spot"] > 0 and short_tf["cb_cvd"] > 0:
                     direction = "SHORT"
                     reason = "🧨 Macro weak, but short-term buyers piling in (short trap)"
@@ -109,7 +109,8 @@ class ReversalVsTrendEngine:
                             signal_text,
                             scored["score"],
                             scored["label"],
-                            short_tf
+                            short_tf,
+                            webhook_override=REVERSAL_WEBHOOK
                         )
 
                         if self.executor.should_execute(scored["score"], scored["label"]):
