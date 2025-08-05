@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py
+# spot_vs_perp_engine.py (with volume scoring integration)
 
 import asyncio
 import os
@@ -17,8 +17,10 @@ from utils.spot_perp_scorer import score_spot_perp_confluence_multi
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.cvd_snapshot_writer import write_snapshot_to_supabase
 from utils.sniper_alert_logger import log_sniper_alert
-from volume_fetcher import fetch_all_volume
 from sniper_executor import SniperExecutor
+
+from volume_fetcher import fetch_all_volume
+from volume_scorer import score_volume_confluence
 
 load_dotenv()
 
@@ -60,14 +62,22 @@ class SpotVsPerpEngine:
                 okx_cvd = self.okx.get_cvd()
 
                 spot_price = bin_price or cb_price
+
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_spot_perp_confluence_multi(deltas)
                 confidence = scored["score"]
                 label = scored["label"]
 
-                # 🔊 Volume Snapshot
+                # Fetch and score volume
                 volume_data = fetch_all_volume()
+                volume_score = score_volume_confluence(volume_data)
+                vol_score = volume_score["volume_score"]
+                vol_label = volume_score["volume_label"]
+
+                # Boost confidence if volume agrees with CVD
+                if vol_label == label:
+                    confidence += 1
 
                 signal = "📊 No clear bias"
                 if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
@@ -88,6 +98,7 @@ class SpotVsPerpEngine:
                 print(f"🟧 Bybit Perp CVD: {bybit_cvd}")
                 print(f"🟪 OKX Futures CVD: {okx_cvd}")
                 print(f"🔊 Volume Snapshot: {volume_data}")
+                print(f"📊 Volume Bias: {vol_label.upper()} | Score: {vol_score}/10")
                 print(f"\n🧠 Signal: {signal}")
                 for tf in ["1m", "3m", "5m"]:
                     d = deltas.get(tf)
