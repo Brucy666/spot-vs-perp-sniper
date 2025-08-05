@@ -1,7 +1,6 @@
 # swing_vs_perp_engine.py
 
 import asyncio
-import os
 import time
 import hashlib
 from dotenv import load_dotenv
@@ -47,6 +46,7 @@ class SwingVsPerpEngine:
     async def monitor(self):
         while True:
             try:
+                # === Collect Feed Data ===
                 cb_cvd = self.coinbase.get_cvd()
                 cb_price = self.coinbase.get_last_price()
 
@@ -61,47 +61,63 @@ class SwingVsPerpEngine:
                 okx_cvd = self.okx.get_cvd()
                 okx_price = self.okx.get_price()
 
-                self.memory.update(cb_cvd, bin_spot, bin_perp)
-                deltas = self.memory.get_all_deltas()
-                scored = score_spot_perp_confluence_multi(deltas)
-                confidence = scored["score"]
-                bias_label = scored["label"]
-
                 spot_price = bin_price or cb_price or bybit_price or okx_price
                 now = time.time()
 
-                signal = f"SWING BIAS | Confidence {confidence}/10 → {bias_label}"
+                # === Update Memory + Score ===
+                self.memory.update(cb_cvd, bin_spot, bin_perp)
+                deltas = self.memory.get_all_deltas()
+                scored = score_spot_perp_confluence_multi(deltas)
 
-                # Only alert when 15m, 1h, and 4h all align
-                if all(tf in deltas for tf in ["15m", "1h", "4h"]):
-                    if bias_label != "neutral" and confidence >= 6:
-                        key = f"{bias_label}-{confidence}-{int(spot_price)}"
-                        hash_sig = hashlib.sha256(key.encode()).hexdigest()
+                confidence = scored["score"]
+                bias_label = scored["label"]
 
-                        if hash_sig != self.last_signal_hash and (now - self.last_signal_time > self.cooldown_seconds):
-                            log_sniper_alert({
-                                "signal": signal,
-                                "direction": "LONG" if bias_label == "spot_dominant" else "SHORT",
-                                "confidence": confidence,
-                                "label": bias_label,
-                                "cb_cvd": deltas["15m"]["cb_cvd"],
-                                "bin_spot": deltas["15m"]["bin_spot"],
-                                "bin_perp": deltas["15m"]["bin_perp"],
-                                "price": spot_price
-                            })
+                signal_text = f"SWING BIAS | Confidence {confidence}/10 → {bias_label.upper()}"
 
-                            await self.alert_dispatcher.maybe_alert(
-                                signal, confidence, bias_label, deltas["15m"]
-                            )
+                # === Print Snapshot to Terminal ===
+                print("\n==================== SWING vs PERP SNAPSHOT ====================")
+                for tf in ["15m", "1h", "4h"]:
+                    if tf in deltas:
+                        d = deltas[tf]
+                        print(f"🕒 {tf.upper()} Δ → CB: {d['cb_cvd']}% | SPOT: {d['bin_spot']}% | PERP: {d['bin_perp']}%")
+                print(f"💡 Final Score: {confidence}/10 → {bias_label}")
+                print("===============================================================\n")
 
-                            self.last_signal_hash = hash_sig
-                            self.last_signal_time = now
+                # === Confirm Multi-TF Alignment ===
+                if all(tf in deltas for tf in ["15m", "1h", "4h"]) and confidence >= 6 and bias_label != "neutral":
+                    signal_key = f"{bias_label}-{confidence}-{int(spot_price)}"
+                    signal_hash = hashlib.sha256(signal_key.encode()).hexdigest()
 
-                            if self.executor.should_execute(confidence, bias_label):
-                                self.executor.execute(signal, confidence, spot_price, bias_label)
+                    if signal_hash != self.last_signal_hash and (now - self.last_signal_time > self.cooldown_seconds):
+                        direction = "LONG" if bias_label == "spot_dominant" else "SHORT"
+
+                        alert_data = {
+                            "signal": signal_text,
+                            "direction": direction,
+                            "confidence": confidence,
+                            "label": bias_label,
+                            "cb_cvd": deltas["15m"]["cb_cvd"],
+                            "bin_spot": deltas["15m"]["bin_spot"],
+                            "bin_perp": deltas["15m"]["bin_perp"],
+                            "price": spot_price
+                        }
+
+                        log_sniper_alert(alert_data)
+                        await self.alert_dispatcher.maybe_alert(
+                            signal_text,
+                            confidence,
+                            bias_label,
+                            deltas["15m"]
+                        )
+
+                        if self.executor.should_execute(confidence, bias_label):
+                            self.executor.execute(signal_text, confidence, spot_price, bias_label)
+
+                        self.last_signal_hash = signal_hash
+                        self.last_signal_time = now
 
             except Exception as e:
-                print(f"[ERROR] Swing loop failed: {e}")
+                print(f"[ERROR] Swing Monitor Failed: {e}")
 
             await asyncio.sleep(30)
 
