@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py
+# spot_vs_perp_engine.py (rewritten with focused sniper TF logic)
 
 import asyncio
 import os
@@ -34,7 +34,7 @@ class SpotVsPerpEngine:
 
         self.last_signal_time = 0
         self.last_signal_hash = ""
-        self.signal_cooldown = 900  # 15m
+        self.signal_cooldown = 300  # 5 min for sniper
 
     async def run(self):
         await asyncio.gather(
@@ -48,7 +48,6 @@ class SpotVsPerpEngine:
     async def monitor(self):
         while True:
             try:
-                # === Collect
                 cb_cvd = self.coinbase.get_cvd()
                 cb_price = self.coinbase.get_last_price()
 
@@ -58,19 +57,16 @@ class SpotVsPerpEngine:
                 bin_price = bin_data["price"]
 
                 bybit_cvd = self.bybit.get_cvd()
-                bybit_price = self.bybit.get_price()
-
                 okx_cvd = self.okx.get_cvd()
-                okx_price = self.okx.get_price()
 
-                # === Score and classify
+                spot_price = bin_price or cb_price
+
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_spot_perp_confluence_multi(deltas)
                 confidence = scored["score"]
                 label = scored["label"]
 
-                # === Signal logic
                 signal = "📊 No clear bias"
                 if cb_cvd > 0 and bin_spot > 0 and bin_perp < 0:
                     signal = "✅ Spot-led move — real demand (Coinbase & Binance Spot rising)"
@@ -83,67 +79,58 @@ class SpotVsPerpEngine:
                 elif cb_cvd > 0 and bin_spot < 0:
                     signal = "🟣 US Spot buying (Coinbase) while Binance Spot is weak — divergence"
 
-                # === Console Output
-                print("\n==================== SPOT vs PERP REPORT ====================")
+                print("\n==================== SPOT SNIPER REPORT ====================")
                 print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
                 print(f"🟦 Binance Spot CVD: {bin_spot}")
                 print(f"🟥 Binance Perp CVD: {bin_perp} | Price: {bin_price}")
-                print(f"🟧 Bybit Perp CVD: {bybit_cvd} | Price: {bybit_price}")
-                print(f"🟪 OKX Futures CVD: {okx_cvd} | Price: {okx_price}")
+                print(f"🟧 Bybit Perp CVD: {bybit_cvd}")
+                print(f"🟪 OKX Futures CVD: {okx_cvd}")
                 print(f"\n🧠 Signal: {signal}")
-                for tf, vals in deltas.items():
-                    print(f"🕒 {tf} CVD Δ → CB: {vals['cb_cvd']}% | Spot: {vals['bin_spot']}% | Perp: {vals['bin_perp']}%")
+                for tf in ["1m", "3m", "5m"]:
+                    d = deltas.get(tf)
+                    if d:
+                        print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
                 print(f"💡 Confidence Score: {confidence}/10 → {label.upper()}")
-                print("=============================================================")
+                print("===========================================================")
 
-                # === Logging
                 snapshot = {
                     "exchange": "multi",
                     "spot_cvd": bin_spot,
                     "perp_cvd": bin_perp,
-                    "price": bin_price or cb_price or bybit_price or okx_price,
+                    "price": spot_price,
                     "signal": signal
                 }
-
                 log_snapshot(snapshot)
 
-                # === Supabase Snapshot
                 now = time.time()
-                signature = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
-                hash_ = hashlib.sha256(signature.encode()).hexdigest()
+                sig_key = f"{signal}-{bin_spot}-{cb_cvd}-{bin_perp}"
+                sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                is_unique = hash_ != self.last_signal_hash
-                is_cooldown_ok = now - self.last_signal_time > self.signal_cooldown
-                is_signal = any(t in signal for t in ["✅", "🚨", "⚠️", "🟡", "🟣"])
-
-                if is_unique and is_cooldown_ok and is_signal:
+                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > self.signal_cooldown):
                     write_snapshot_to_supabase(snapshot)
                     self.last_signal_time = now
-                    self.last_signal_hash = hash_
+                    self.last_signal_hash = sig_hash
 
-                    # === Log sniper entry
                     log_sniper_alert({
                         "signal": signal,
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
                         "confidence": confidence,
                         "label": label,
-                        "cb_cvd": deltas["15m"]["cb_cvd"],
-                        "bin_spot": deltas["15m"]["bin_spot"],
-                        "bin_perp": deltas["15m"]["bin_perp"],
-                        "price": snapshot["price"]
+                        "cb_cvd": deltas["3m"]["cb_cvd"],
+                        "bin_spot": deltas["3m"]["bin_spot"],
+                        "bin_perp": deltas["3m"]["bin_perp"],
+                        "price": spot_price
                     })
 
-                    # === Discord alert
                     await self.alert_dispatcher.maybe_alert(
-                        signal, confidence, label, deltas["15m"]
+                        signal, confidence, label, deltas["3m"]
                     )
 
-                    # === Execution
                     if self.executor.should_execute(confidence, label):
-                        self.executor.execute(signal, confidence, snapshot["price"], label)
+                        self.executor.execute(signal, confidence, spot_price, label)
 
             except Exception as e:
-                print(f"[ERROR] Spot Monitor Failed: {e}")
+                print(f"[ERROR] Spot Sniper Engine Error: {e}")
 
             await asyncio.sleep(5)
 
