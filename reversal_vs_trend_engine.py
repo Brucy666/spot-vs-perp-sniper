@@ -1,4 +1,4 @@
-# reversal_vs_trend_engine.py (with volume fetch + logs)
+ # reversal_vs_trend_engine.py (with volume scoring integration)
 
 import asyncio
 import os
@@ -15,8 +15,9 @@ from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
-from scorer_reversal import score_reversal_confluence
 from volume_fetcher import fetch_all_volume
+from volume_scorer import score_volume_confluence
+from scorer_reversal import score_reversal_confluence
 
 load_dotenv()
 
@@ -53,10 +54,10 @@ class ReversalVsTrendEngine:
                 bin_perp = bin_data["perp"]
                 bin_price = bin_data["price"]
 
-                bybit_cvd = self.bybit.get_cvd()
-                okx_cvd = self.okx.get_cvd()
+                bybit_price = self.bybit.get_price()
+                okx_price = self.okx.get_price()
 
-                spot_price = bin_price or cb_price
+                spot_price = bin_price or cb_price or bybit_price or okx_price
                 if not spot_price:
                     print("[REVERSAL ERROR] No spot price available, skipping...")
                     await asyncio.sleep(30)
@@ -65,44 +66,60 @@ class ReversalVsTrendEngine:
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_reversal_confluence(deltas)
-                confidence = scored["score"]
+                cvd_score = scored["score"]
                 label = scored["label"]
 
-                # Fetch and log live volume
+                # Volume
                 volume_data = fetch_all_volume()
-                print("🔊 Volume Snapshot:", volume_data)
+                volume_result = score_volume_confluence(volume_data)
+                volume_score = volume_result["volume_score"]
+                volume_label = volume_result["volume_label"]
+
+                # Final score = blend CVD + volume
+                final_score = round((cvd_score * 0.7) + (volume_score * 0.3), 2)
 
                 print("\n==================== REVERSAL BIAS REPORT ====================")
                 for tf in ["5m", "15m", "30m"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"🔁 Reversal Bias: {label.upper()} | Confidence: {confidence}/10")
-                print("==============================================================")
+                print(f"💡 Reversal Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
+                print("🔊 Volume Snapshot:", volume_data)
+                print("================================================================")
+
+                core_tf = deltas.get("15m")
+                if not core_tf:
+                    await asyncio.sleep(30)
+                    continue
 
                 now = time.time()
-                sig_key = f"{label}-{confidence}-{int(spot_price)}"
+                sig_key = f"{label}-{final_score}-{int(spot_price)}"
                 sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > 1200):
+                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > self.alert_dispatcher.cooldown_seconds):
                     self.last_signal_time = now
                     self.last_signal_hash = sig_hash
 
-                    signal_text = f"Brucy Bonus💥 REVERSAL BIAS | Confidence {confidence}/10 → {label}"
+                    signal_text = f"Brucy Bonus💥 REVERSAL BIAS | Confidence {final_score}/10 → {label}"
 
                     log_sniper_alert({
                         "signal": signal_text,
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
-                        "confidence": confidence,
+                        "confidence": final_score,
                         "label": label,
-                        "cb_cvd": deltas["15m"]["cb_cvd"],
-                        "bin_spot": deltas["15m"]["bin_spot"],
-                        "bin_perp": deltas["15m"]["bin_perp"],
+                        "cb_cvd": core_tf["cb_cvd"],
+                        "bin_spot": core_tf["bin_spot"],
+                        "bin_perp": core_tf["bin_perp"],
                         "price": spot_price
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text, confidence, label, deltas["15m"]
+                        signal_text=signal_text,
+                        confidence=final_score,
+                        label=label,
+                        deltas=core_tf,
+                        cvd_score=cvd_score,
+                        volume_score=volume_score
                     )
 
             except Exception as e:
