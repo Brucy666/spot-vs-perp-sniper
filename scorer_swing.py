@@ -1,16 +1,17 @@
-# scorer_swing.py
+# scorer_swing.py (updated with 30m TF support)
 
 def score_swing_tf(deltas):
     """
     Swing scoring engine: evaluates higher timeframes for bias.
-    Uses: 15m, 1h, 4h
+    Uses: 15m, 30m, 1h, 4h
     Returns a dict with total score and bias label
     """
     try:
         tf_weights = {
             "15m": 1,
-            "1h": 2,
-            "4h": 3
+            "30m": 1.5,
+            "1h":  2,
+            "4h":  2.5
         }
 
         score = 0
