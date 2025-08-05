@@ -1,4 +1,4 @@
-# swing_vs_perp_engine.py (rewritten to use 15m/1h/4h logic only)
+# swing_vs_perp_engine.py (wired with scorer_swing.py)
 
 import asyncio
 import os
@@ -13,10 +13,10 @@ from feeds.okx_feed import OKXCVDTracker
 
 from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
-from utils.spot_perp_scorer import score_spot_perp_confluence_multi
 from utils.sniper_alert_logger import log_sniper_alert
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from sniper_executor import SniperExecutor
+from scorer_swing import score_swing_tf
 
 load_dotenv()
 
@@ -66,7 +66,7 @@ class SwingVsPerpEngine:
                     await asyncio.sleep(30)
                     continue
 
-                scored = score_spot_perp_confluence_multi(deltas)
+                scored = score_swing_tf(deltas)
                 confidence = scored["score"]
                 label = scored["label"]
                 signal = f"SWING ALIGNMENT | Confidence {confidence}/10 → {label.upper()}"
