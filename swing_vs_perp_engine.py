@@ -1,4 +1,4 @@
-# swing_vs_perp_engine.py
+# swing_vs_perp_engine.py (with volume scoring integrated)
 
 import asyncio
 import os
@@ -16,6 +16,7 @@ from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
 from volume_fetcher import fetch_all_volume
+from volume_scorer import score_volume_confluence
 from scorer_swing import score_swing_confluence
 
 load_dotenv()
@@ -65,19 +66,25 @@ class SwingVsPerpEngine:
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_swing_confluence(deltas)
-                confidence = scored["score"]
+                cvd_score = scored["score"]
                 label = scored["label"]
 
-                # 🔊 Fetch and print live volume
+                # Volume
                 volume_data = fetch_all_volume()
-                
+                volume_result = score_volume_confluence(volume_data)
+                volume_score = volume_result["volume_score"]
+                volume_label = volume_result["volume_label"]
+
+                # Final score = blended CVD + volume
+                final_score = round((cvd_score * 0.7) + (volume_score * 0.3), 2)
+
                 print("\n==================== SWING BIAS REPORT ====================")
                 for tf in ["15m", "30m", "1h", "4h"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"💡 Swing Bias: {label.upper()} | Confidence: {confidence}/10")
-                print(f"🔊 Volume Snapshot: {volume_data}")
+                print(f"💡 Swing Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
+                print("🔊 Volume Snapshot:", volume_data)
                 print("==========================================================")
 
                 core_tf = deltas.get("30m")
@@ -86,22 +93,19 @@ class SwingVsPerpEngine:
                     continue
 
                 now = time.time()
-                sig_key = f"{label}-{confidence}-{int(spot_price)}"
+                sig_key = f"{label}-{final_score}-{int(spot_price)}"
                 sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
 
-                is_unique = sig_hash != self.last_signal_hash
-                is_cooldown_ok = (now - self.last_signal_time) > self.alert_dispatcher.cooldown_seconds
-
-                if is_unique and is_cooldown_ok:
+                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > self.alert_dispatcher.cooldown_seconds):
                     self.last_signal_time = now
                     self.last_signal_hash = sig_hash
 
-                    signal_text = f"Brucy Bonus💥 SWING BIAS | Confidence {confidence}/10 → {label}"
+                    signal_text = f"Brucy Bonus💥 SWING BIAS | Confidence {final_score}/10 → {label}"
 
                     log_sniper_alert({
                         "signal": signal_text,
                         "direction": "LONG" if label == "spot_dominant" else "SHORT",
-                        "confidence": confidence,
+                        "confidence": final_score,
                         "label": label,
                         "cb_cvd": core_tf["cb_cvd"],
                         "bin_spot": core_tf["bin_spot"],
@@ -110,7 +114,12 @@ class SwingVsPerpEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text, confidence, label, core_tf
+                        signal_text=signal_text,
+                        confidence=final_score,
+                        label=label,
+                        deltas=core_tf,
+                        cvd_score=cvd_score,
+                        volume_score=volume_score
                     )
 
             except Exception as e:
