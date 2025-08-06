@@ -1,47 +1,36 @@
-# feeds/bybit_feed.py (updated for V5 WebSocket API)
+# feeds/bybit_feed.py
 
 import asyncio
-import json
 import websockets
+import json
 
 class BybitCVDTracker:
     def __init__(self):
-        self.price = 0.0
-        self.cvd = 0.0
-        self.symbol = "BTCUSDT"
-        self.endpoint = "wss://stream.bybit.com/v5/public/linear"
+        self.cvd = 0
+        self.price = 0
 
     async def connect(self):
-        while True:
+        uri = "wss://stream.bybit.com/v5/public/linear"
+        async for ws in websockets.connect(uri, ping_interval=None):
             try:
-                async with websockets.connect(self.endpoint) as ws:
-                    # Subscribe to trades
-                    await ws.send(json.dumps({
-                        "op": "subscribe",
-                        "args": [f"publicTrade.{self.symbol}"]
-                    }))
-
-                    async for message in ws:
-                        data = json.loads(message)
-
-                        if data.get("topic") == f"publicTrade.{self.symbol}" and "data" in data:
-                            for trade in data["data"]:
-                                price = float(trade["p"])
-                                size = float(trade["v"])
-                                side = trade["S"]  # Buy or Sell
-
-                                self.price = price
-                                if side == "Buy":
-                                    self.cvd += size
-                                else:
-                                    self.cvd -= size
-
+                await ws.send(json.dumps({
+                    "op": "subscribe",
+                    "args": ["publicTrade.BTCUSDT"]
+                }))
+                async for msg in ws:
+                    data = json.loads(msg)
+                    if "data" in data:
+                        for trade in data["data"]:
+                            qty = float(trade["v"])
+                            side = trade["S"]
+                            self.cvd += qty if side == "Buy" else -qty
+                            self.price = float(trade["p"])
             except Exception as e:
-                print("[X] Bybit feed error:", e)
-                await asyncio.sleep(5)  # brief delay before reconnect
-
-    def get_price(self):
-        return self.price
+                print("[X] Bybit Perp error:", e)
+                await asyncio.sleep(3)
 
     def get_cvd(self):
         return round(self.cvd, 2)
+
+    def get_price(self):
+        return self.price
