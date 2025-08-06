@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py (AI-enhanced, volume-patched, typo-fixed)
+# spot_vs_perp_engine.py (AI-enhanced, volume-patched, fixed)
 
 import asyncio
 import os
@@ -64,8 +64,79 @@ class SpotVsPerpEngine:
                     await asyncio.sleep(5)
                     continue
 
-                # CVD-based memory and scoring
+                # CVD-based scoring
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
+                deltas = self.memory.get_all_deltas()
+                scored = score_sniper_confluence(deltas)
+                confidence = scored["score"]
+                label = scored["label"]
+
+                # Volume scoring
+                volume_data = fetch_all_volume()
+                vol_score, vol_label = score_volume_bias(volume_data)
+
+                # Console output
+                print("\n==================== SPOT SNIPER REPORT ====================")
+                print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
+                print(f"🟦 Binance Spot CVD: {bin_spot}")
+                print(f"🟥 Binance Perp CVD: {bin_perp} | Price: {bin_price}")
+                print(f"🟧 Bybit Perp CVD: {bybit_cvd}")
+                print(f"🟪 OKX Futures CVD: {okx_cvd}")
+                for tf in ["1m", "3m", "5m"]:
+                    d = deltas.get(tf)
+                    if d:
+                        print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
+                print(f"🔊 Volume Bias: {vol_label.upper()} | Score: {vol_score}/10")
+                print(f"💡 Confidence Score: {confidence}/10 → {label.upper()}")
+                print("===========================================================")
+
+                snapshot = {
+                    "exchange": "multi",
+                    "spot_cvd": bin_spot,
+                    "perp_cvd": bin_perp,
+                    "price": spot_price,
+                    "signal": f"{label.upper()}"
+                }
+
+                now = time.time()
+                sig_key = f"{label}-{confidence}-{int(spot_price)}"
+                sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
+
+                if sig_hash != self.last_signal_hash and (now - self.last_signal_time > 300):
+                    self.last_signal_time = now
+                    self.last_signal_hash = sig_hash
+
+                    signal_text = (
+                        f"Brucy Bonus💥 SPOT SIGNAL | Confidence {confidence}/10 → {label} | "
+                        f"Volume {vol_score}/10 → {vol_label}"
+                    )
+
+                    log_sniper_alert({
+                        "signal": signal_text,
+                        "direction": "LONG" if label == "spot_dominant" else "SHORT",
+                        "confidence": confidence,
+                        "label": label,
+                        "cb_cvd": deltas["3m"]["cb_cvd"],
+                        "bin_spot": deltas["3m"]["bin_spot"],
+                        "bin_perp": deltas["3m"]["bin_perp"],
+                        "price": spot_price
+                    })
+
+                    # ✅ FIXED: Positional call to maybe_alert
+                    await self.alert_dispatcher.maybe_alert(
+                        signal_text, confidence, label, deltas["3m"]
+                    )
+
+            except Exception as e:
+                print(f"[ERROR] Spot Sniper Engine Error: {e}")
+
+            await asyncio.sleep(5)
+
+
+if __name__ == "__main__":
+    engine = SpotVsPerpEngine()
+    asyncio.run(engine.run())
+    self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_sniper_confluence(deltas)
                 confidence = scored["score"]
