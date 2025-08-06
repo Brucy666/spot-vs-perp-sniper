@@ -1,4 +1,4 @@
-# okx_feed.py (patched with resilient reconnect loop)
+# feeds/okx_feed.py
 
 import asyncio
 import websockets
@@ -8,46 +8,29 @@ class OKXCVDTracker:
     def __init__(self):
         self.cvd = 0
         self.price = 0
-        self.ws_url = "wss://ws.okx.com:8443/ws/v5/public"
 
     async def connect(self):
-        while True:
+        uri = "wss://ws.okx.com:8443/ws/v5/public"
+        async for ws in websockets.connect(uri, ping_interval=None):
             try:
-                print("[OKX] Connecting to WebSocket...")
-                async with websockets.connect(self.ws_url, ping_interval=20) as ws:
-                    await self.subscribe(ws)
-                    await self.listen(ws)
-            except (websockets.exceptions.ConnectionClosedError, asyncio.TimeoutError) as e:
-                print("[OKX] Connection lost. Reconnecting in 5s...", e)
-                await asyncio.sleep(5)
+                await ws.send(json.dumps({
+                    "op": "subscribe",
+                    "args": [{"channel": "trades", "instId": "BTC-USDT-SWAP"}]
+                }))
+                async for msg in ws:
+                    data = json.loads(msg)
+                    if "data" in data:
+                        for trade in data["data"]:
+                            qty = float(trade["sz"])
+                            side = trade["side"]
+                            self.cvd += qty if side == "buy" else -qty
+                            self.price = float(trade["px"])
             except Exception as e:
-                print("[OKX] Unexpected error:", e)
-                await asyncio.sleep(5)
-
-    async def subscribe(self, ws):
-        payload = {
-            "op": "subscribe",
-            "args": [{"channel": "open_interest", "instId": "BTC-USD-SWAP"}]
-        }
-        await ws.send(json.dumps(payload))
-
-    async def listen(self, ws):
-        async for msg in ws:
-            data = json.loads(msg)
-            if "data" in data:
-                self.handle_data(data["data"])
-
-    def handle_data(self, payload):
-        try:
-            # Example: grab OI or price for fallback
-            item = payload[0]
-            self.cvd = float(item.get("oi", 0))
-            self.price = float(item.get("last", 0))
-        except Exception as e:
-            print("[OKX] Failed to parse data:", e)
+                print("[X] OKX error:", e)
+                await asyncio.sleep(3)
 
     def get_cvd(self):
-        return self.cvd
+        return round(self.cvd, 2)
 
     def get_price(self):
         return self.price
