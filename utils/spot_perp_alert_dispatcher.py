@@ -1,5 +1,3 @@
-# Replace your entire class with this:
-
 import time
 import hashlib
 from utils.discord_alert import send_discord_alert
