@@ -1,5 +1,3 @@
-# reversal_vs_trend_engine.py
-
 import asyncio
 import os
 import time
@@ -17,7 +15,7 @@ from utils.sniper_alert_logger import log_sniper_alert
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 
 from scorer_reversal import score_reversal_confluence
-from utils.volume_fetcher import fetch_all_volume
+from utils.global_volume_fetcher import fetch_all_volume
 from utils.ai_volume_scoring import score_volume_bias
 
 load_dotenv()
@@ -112,12 +110,7 @@ class ReversalVsTrendEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text=signal_text,
-                        confidence=final_score,
-                        label=label,
-                        deltas=core_tf,
-                        cvd_score=cvd_score,
-                        volume_score=volume_score
+                        signal_text, final_score, label, core_tf, mode="reversal"
                     )
 
             except Exception as e:
