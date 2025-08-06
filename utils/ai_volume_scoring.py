@@ -1,12 +1,11 @@
-# ai_volume_scoring.py (Upgraded Volume & Short Detection Logic)
-
-import math
+# ai_volume_scoring.py (Sharpened Short Bias Detection)
 
 def score_volume_bias(volume_data):
     """
-    Enhanced AI scoring logic for volume confluence.
-    Dynamically scales score based on volume ratio, size, and delta.
-    Returns a volume_score (0-10) and directional label.
+    Enhanced volume bias logic: adds sharper SHORT detection
+    Returns:
+        score (float): 0 to 10 confidence score
+        label (str): spot_dominant | perp_dominant | neutral
     """
     try:
         spot = float(volume_data.get("binance_spot_volume", 0))
@@ -18,18 +17,18 @@ def score_volume_bias(volume_data):
         ratio = spot / perp
         imbalance = round((spot - perp) / max(spot, perp) * 100, 2)
 
-        # Penalty for low liquidity
-        liquidity_factor = min(spot + perp, 50000000) / 50000000  # scale to 1
+        liquidity_factor = min(spot + perp, 50000000) / 50000000
 
-        # Score scale
         if ratio >= 1.2:
             score = min(10, (ratio * 5 + imbalance / 10) * liquidity_factor)
             return round(score, 2), "spot_dominant"
-        elif ratio <= 0.8:
-            score = min(10, ((1 / ratio) * 5 + abs(imbalance) / 10) * liquidity_factor)
+
+        elif ratio <= 0.85:
+            strength = (1 / ratio) * 6 + abs(imbalance) / 8  # stronger SHORT weighting
+            score = min(10, strength * liquidity_factor)
             return round(score, 2), "perp_dominant"
-        else:
-            return 0, "neutral"
+
+        return 0, "neutral"
 
     except Exception as e:
         print("[X] AI Volume Scoring Error:", e)
