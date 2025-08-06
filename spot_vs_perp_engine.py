@@ -1,4 +1,4 @@
-# spot_vs_perp_engine.py
+# spot_vs_perp_engine.py (with trap journal logging)
 
 import asyncio
 import os
@@ -17,6 +17,7 @@ from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
 from utils.global_volume_fetcher import fetch_all_volume
 from utils.ai_volume_scoring import score_volume_bias
+from utils.trap_journal import log_trap_signal
 from scorer_sniper import score_sniper_confluence
 
 load_dotenv()
@@ -75,7 +76,6 @@ class SpotVsPerpEngine:
 
                 vol_score, vol_label = volume_bias
 
-                # Console output
                 print("\n==================== SPOT SNIPER REPORT ====================")
                 print(f"🟩 Coinbase Spot CVD: {cb_cvd} | Price: {cb_price}")
                 print(f"🟦 Binance Spot CVD: {bin_spot}")
@@ -112,6 +112,18 @@ class SpotVsPerpEngine:
                         "bin_spot": deltas["3m"]["bin_spot"],
                         "bin_perp": deltas["3m"]["bin_perp"],
                         "price": spot_price
+                    })
+
+                    log_trap_signal({
+                        "signal": signal_text,
+                        "label": label,
+                        "confidence": confidence,
+                        "volume_score": vol_score,
+                        "cb_cvd": deltas["3m"]["cb_cvd"],
+                        "bin_spot": deltas["3m"]["bin_spot"],
+                        "bin_perp": deltas["3m"]["bin_perp"],
+                        "price": spot_price,
+                        "direction": "LONG" if label == "spot_dominant" else "SHORT"
                     })
 
                     await self.alert_dispatcher.maybe_alert(
