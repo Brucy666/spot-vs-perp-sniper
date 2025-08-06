@@ -1,20 +1,15 @@
-# scorer_sniper.py
+# scorer_sniper.py (AI-enhanced directional scoring logic)
 
-def score_sniper_confluence(deltas):
+def score_sniper_confluence(deltas, volume_bias=None):
     """
-    Sniper scoring engine.
-    Evaluates short-term timeframes (1m, 3m, 5m) for aggressive confluence.
-    Returns:
-        {
-            "score": float,
-            "label": "spot_dominant" | "perp_dominant" | "neutral"
-        }
+    Multi-timeframe CVD scoring logic with volume bias integration.
+    Returns score (float) and label (str).
     """
     try:
         tf_weights = {
-            "1m": 1.5,
-            "3m": 2.0,
-            "5m": 2.5
+            "1m": 1,
+            "3m": 1.5,
+            "5m": 2
         }
 
         score = 0
@@ -29,23 +24,33 @@ def score_sniper_confluence(deltas):
             spot = tf_delta["bin_spot"]
             perp = tf_delta["bin_perp"]
 
-            # Spot-led sniper
             if cb > 0 and spot > 0 and perp < 0:
                 score += 1.5 * weight
-            elif cb > 0 and spot > 0:
-                score += 1.0 * weight
-            elif cb < 0 and spot < 0:
-                score -= 1.0 * weight
             elif perp > 0 and cb < 0 and spot <= 0:
                 score -= 1.5 * weight
+            elif cb > 0 and spot < 0:
+                score += 0.5 * weight
+            elif cb < 0 and spot > 0:
+                score -= 0.5 * weight
 
             total_weight += weight
 
-        final_score = round(score / total_weight * 10, 2) if total_weight else 0
+        if total_weight == 0:
+            return {"score": 0, "label": "neutral"}
 
-        if final_score > 3:
+        cvd_score = round(score / total_weight * 10, 2)
+
+        # Blend with volume bias
+        final_score = cvd_score
+        if volume_bias:
+            vol_score, vol_label = volume_bias
+            blend_ratio = 0.7 if vol_label == "neutral" else 0.5
+            final_score = round((cvd_score * blend_ratio) + (vol_score * (1 - blend_ratio)), 2)
+
+        # Label
+        if final_score > 2:
             label = "spot_dominant"
-        elif final_score < -3:
+        elif final_score < -2:
             label = "perp_dominant"
         else:
             label = "neutral"
@@ -56,8 +61,5 @@ def score_sniper_confluence(deltas):
         }
 
     except Exception as e:
-        print("[X] Error in score_sniper_confluence:", e)
-        return {
-            "score": 0,
-            "label": "neutral"
-        }
+        print("[X] Sniper scoring error:", e)
+        return {"score": 0, "label": "neutral"}
