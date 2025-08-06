@@ -1,48 +1,48 @@
-# feeds/coinbase_feed.py
+# feeds/coinbase_feed.py (patched with reconnect logic)
 
 import asyncio
 import websockets
 import json
 
 class CoinbaseSpotCVD:
-    def __init__(self, product_id="BTC-USD"):
-        self.product_id = product_id
+    def __init__(self):
+        self.ws_url = "wss://ws-feed.exchange.coinbase.com"
+        self.product_id = "BTC-USD"
         self.cvd = 0
         self.last_price = None
 
     async def connect(self):
-        uri = "wss://ws-feed.exchange.coinbase.com"
-        async with websockets.connect(uri) as ws:
-            await ws.send(json.dumps({
-                "type": "subscribe",
-                "channels": [{"name": "matches", "product_ids": [self.product_id]}]
-            }))
-            async for message in ws:
-                await self.handle_message(json.loads(message))
+        while True:
+            try:
+                async with websockets.connect(self.ws_url) as ws:
+                    sub_msg = {
+                        "type": "subscribe",
+                        "product_ids": [self.product_id],
+                        "channels": ["matches"]
+                    }
+                    await ws.send(json.dumps(sub_msg))
 
-    async def handle_message(self, msg):
-        if msg["type"] == "match":
-            side = msg["side"]
-            size = float(msg["size"])
-            price = float(msg["price"])
-            self.last_price = price
+                    async for msg in ws:
+                        await self._process(msg)
+            except Exception as e:
+                print("[X] Coinbase reconnecting:", e)
+                await asyncio.sleep(5)
 
-            if side == "buy":
-                self.cvd += size
-            elif side == "sell":
-                self.cvd -= size
+    async def _process(self, msg):
+        try:
+            data = json.loads(msg)
+            if data.get("type") == "match":
+                price = float(data["price"])
+                size = float(data["size"])
+                side = data["side"]
+
+                self.last_price = price
+                self.cvd += size if side == "buy" else -size
+        except Exception as e:
+            print("[X] Coinbase parse error:", e)
 
     def get_cvd(self):
         return round(self.cvd, 2)
 
     def get_last_price(self):
         return self.last_price
-
-
-if __name__ == "__main__":
-    tracker = CoinbaseSpotCVD()
-
-    async def run():
-        await tracker.connect()
-
-    asyncio.run(run())
