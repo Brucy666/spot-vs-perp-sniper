@@ -18,7 +18,7 @@ from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 
 from scorer_reversal import score_reversal_confluence
 from utils.volume_fetcher import fetch_all_volume
-from volume_scorer import score_volume_bias
+from utils.ai_volume_scoring import score_volume_bias
 
 load_dotenv()
 
