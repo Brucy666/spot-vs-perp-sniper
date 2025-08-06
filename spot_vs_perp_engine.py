@@ -15,7 +15,7 @@ from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
-from utils.volume_fetcher import fetch_all_volume
+from utils.enhanced_volume_fetcher import fetch_all_volume
 from utils.ai_volume_scoring import score_volume_bias
 from scorer_sniper import score_sniper_confluence
 
