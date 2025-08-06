@@ -1,58 +1,54 @@
-# feeds/binance_feed.py
+# feeds/binance_feed.py (patched with reconnect logic)
 
 import asyncio
 import websockets
 import json
 
 class BinanceCVDTracker:
-    def __init__(self, spot_symbol="btcusdt", perp_symbol="btcusdt"):
-        self.spot_symbol = spot_symbol
-        self.perp_symbol = perp_symbol
-        self.spot_cvd = 0.0
-        self.perp_cvd = 0.0
-        self.price = None
+    def __init__(self):
+        self.ws_url = "wss://stream.binance.com:9443/ws"
+        self.symbol_spot = "btcusdt"
+        self.symbol_perp = "btcusdt@aggTrade"
+
+        self.spot_cvd = 0
+        self.perp_cvd = 0
+        self.last_price = None
 
     async def connect(self):
-        await asyncio.gather(
-            self._connect_spot(),
-            self._connect_perp()
-        )
+        while True:
+            try:
+                streams = f"{self.symbol_spot}@aggTrade/{self.symbol_perp}"
+                full_url = f"{self.ws_url}/{streams}"
+                async with websockets.connect(full_url) as ws:
+                    async for msg in ws:
+                        await self._process(msg)
+            except Exception as e:
+                print("[X] Binance reconnecting:", e)
+                await asyncio.sleep(5)
 
-    async def _connect_spot(self):
-        uri = f"wss://stream.binance.com:9443/ws/{self.spot_symbol}@aggTrade"
-        async with websockets.connect(uri) as ws:
-            async for msg in ws:
-                await self._handle_spot_trade(json.loads(msg))
+    async def _process(self, msg):
+        try:
+            data = json.loads(msg)
+            stream = data.get("s") or data.get("stream", "").split("@")[0]
+            payload = data.get("data", data)
+            price = float(payload["p"])
+            qty = float(payload["q"])
+            is_buyer_maker = payload["m"]
 
-    async def _connect_perp(self):
-        uri = f"wss://fstream.binance.com/ws/{self.perp_symbol}@aggTrade"
-        async with websockets.connect(uri) as ws:
-            async for msg in ws:
-                await self._handle_perp_trade(json.loads(msg))
+            self.last_price = price
+            delta = -qty if is_buyer_maker else qty
 
-    async def _handle_spot_trade(self, msg):
-        price = float(msg["p"])
-        qty = float(msg["q"])
-        is_buyer_maker = msg["m"]
-        self.price = price
-        if is_buyer_maker:
-            self.spot_cvd -= qty
-        else:
-            self.spot_cvd += qty
+            if stream.lower() == self.symbol_spot:
+                self.spot_cvd += delta
+            elif stream.lower() == self.symbol_perp:
+                self.perp_cvd += delta
 
-    async def _handle_perp_trade(self, msg):
-        price = float(msg["p"])
-        qty = float(msg["q"])
-        is_buyer_maker = msg["m"]
-        self.price = price
-        if is_buyer_maker:
-            self.perp_cvd -= qty
-        else:
-            self.perp_cvd += qty
+        except Exception as e:
+            print("[X] Binance parse error:", e)
 
     def get_cvd(self):
         return {
             "spot": round(self.spot_cvd, 2),
             "perp": round(self.perp_cvd, 2),
-            "price": self.price
+            "price": self.last_price
         }
