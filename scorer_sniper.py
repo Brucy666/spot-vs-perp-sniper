@@ -2,7 +2,7 @@
 
 def score_sniper_confluence(deltas, volume_bias=None):
     """
-    Multi-timeframe CVD scoring logic with volume bias integration.
+    Multi-timeframe CVD scoring logic with enhanced SHORT detection and volume confluence.
     Returns score (float) and label (str).
     """
     try:
@@ -24,30 +24,35 @@ def score_sniper_confluence(deltas, volume_bias=None):
             spot = tf_delta["bin_spot"]
             perp = tf_delta["bin_perp"]
 
+            # 🔴 Custom SHORT trigger: clear retail long trap
+            if cb < -5 and perp > 5 and spot <= 0:
+                return {"score": 9, "label": "perp_dominant"}
+
+            # 🧠 Scoring logic
             if cb > 0 and spot > 0 and perp < 0:
-                score += 1.5 * weight
+                score += 1.5 * weight  # strong LONG
             elif perp > 0 and cb < 0 and spot <= 0:
-                score -= 1.5 * weight
+                score -= 1.5 * weight  # strong SHORT
             elif cb > 0 and spot < 0:
-                score += 0.5 * weight
+                score += 0.5 * weight  # weak long
             elif cb < 0 and spot > 0:
-                score -= 0.5 * weight
+                score -= 0.5 * weight  # weak short
 
             total_weight += weight
 
         if total_weight == 0:
             return {"score": 0, "label": "neutral"}
 
-        cvd_score = round(score / total_weight * 10, 2)
+        cvd_score = round((score / total_weight) * 10, 2)
 
-        # Blend with volume bias
+        # 🔄 Volume blending
         final_score = cvd_score
         if volume_bias:
             vol_score, vol_label = volume_bias
             blend_ratio = 0.7 if vol_label == "neutral" else 0.5
             final_score = round((cvd_score * blend_ratio) + (vol_score * (1 - blend_ratio)), 2)
 
-        # Label
+        # 🧭 Final label
         if final_score > 2:
             label = "spot_dominant"
         elif final_score < -2:
