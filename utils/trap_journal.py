@@ -1,17 +1,24 @@
-# trap_journal.py
-
 import json
 import os
 import time
+import openai
 
 TRAP_LOG_FILE = "trap_log.json"
 
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+
 def log_trap_signal(snapshot):
     """
-    Stores trap signal snapshot with timestamp into trap_log.json
+    Logs trap signal locally and adds GPT commentary.
     """
     snapshot["timestamp"] = time.time()
+
     try:
+        # Optional GPT tag
+        snapshot["gpt_comment"] = get_gpt_comment(snapshot)
+
+        # Load existing file
         if os.path.exists(TRAP_LOG_FILE):
             with open(TRAP_LOG_FILE, "r") as f:
                 data = json.load(f)
@@ -24,6 +31,7 @@ def log_trap_signal(snapshot):
             json.dump(data, f, indent=2)
 
         print(f"[🪤] Trap logged: {snapshot['signal']} at {snapshot['price']}")
+        print(f"[🤖] GPT says: {snapshot['gpt_comment']}")
 
     except Exception as e:
         print("[X] Failed to write trap log:", e)
@@ -31,8 +39,7 @@ def log_trap_signal(snapshot):
 
 def resolve_trap_outcome(current_price):
     """
-    Reads open traps and checks outcome based on exit price.
-    Updates log with win/loss tags and outcome info.
+    Updates all open traps with exit price and outcome result (win/loss).
     """
     try:
         if not os.path.exists(TRAP_LOG_FILE):
@@ -50,7 +57,6 @@ def resolve_trap_outcome(current_price):
                 trap["exit_price"] = current_price
                 trap["exit_time"] = time.time()
 
-                # Determine result
                 if direction == "LONG":
                     trap["outcome"] = "win" if current_price > entry_price else "loss"
                 elif direction == "SHORT":
@@ -67,3 +73,34 @@ def resolve_trap_outcome(current_price):
 
     except Exception as e:
         print("[X] Trap outcome resolution failed:", e)
+
+
+def get_gpt_comment(trap):
+    """
+    Uses OpenAI GPT to add human-style trap commentary.
+    """
+    try:
+        prompt = (
+            f"You're a crypto sniper AI assistant. Given this trap setup:\n"
+            f"- Signal: {trap['signal']}\n"
+            f"- Direction: {trap['direction']}\n"
+            f"- Confidence: {trap.get('confidence', '?')}/10\n"
+            f"- CB CVD: {trap.get('cb_cvd', '?')}%\n"
+            f"- Spot: {trap.get('bin_spot', '?')}%\n"
+            f"- Perp: {trap.get('bin_perp', '?')}%\n"
+            f"- Bias: {trap.get('label', '?')}\n"
+            f"→ Give a 1-line summary assessing this trap quality."
+        )
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=60,
+            temperature=0.7,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        print("[X] GPT trap commentary failed:", e)
+        return "GPT unavailable"
