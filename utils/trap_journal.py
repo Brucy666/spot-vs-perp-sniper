@@ -1,77 +1,69 @@
-# trap_journal.py (with resolve_trap_outcome logic)
+# trap_journal.py
 
-import os
 import json
-from datetime import datetime
+import os
+import time
 
-TRAP_JOURNAL_FILE = "data/sniper_trap_log.json"
-
-os.makedirs(os.path.dirname(TRAP_JOURNAL_FILE), exist_ok=True)
-
-def load_trap_journal():
-    if os.path.exists(TRAP_JOURNAL_FILE):
-        with open(TRAP_JOURNAL_FILE, "r") as f:
-            return json.load(f)
-    return []
-
-def save_trap_journal(data):
-    with open(TRAP_JOURNAL_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+TRAP_LOG_FILE = "trap_log.json"
 
 def log_trap_signal(snapshot):
-    snapshot["timestamp"] = datetime.utcnow().isoformat()
-    snapshot["status"] = "open"
-    journal = load_trap_journal()
-    journal.append(snapshot)
-    save_trap_journal(journal)
-    print("[+] Sniper trap logged to journal.")
-
-def resolve_trap_outcome(price_now: float, threshold: float = 0.0025):
     """
-    Marks open trades as win/loss based on move from entry price.
-    threshold is percentage move (0.25% by default).
+    Stores trap signal snapshot with timestamp into trap_log.json
     """
-    journal = load_trap_journal()
-    updated = False
+    snapshot["timestamp"] = time.time()
+    try:
+        if os.path.exists(TRAP_LOG_FILE):
+            with open(TRAP_LOG_FILE, "r") as f:
+                data = json.load(f)
+        else:
+            data = []
 
-    for trap in journal:
-        if trap.get("status") != "open":
-            continue
+        data.append(snapshot)
 
-        entry_price = trap.get("price")
-        direction = trap.get("direction")
+        with open(TRAP_LOG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
-        if not entry_price or not direction:
-            continue
+        print(f"[🪤] Trap logged: {snapshot['signal']} at {snapshot['price']}")
 
-        move_pct = abs(price_now - entry_price) / entry_price
+    except Exception as e:
+        print("[X] Failed to write trap log:", e)
 
-        if direction == "LONG" and price_now >= entry_price * (1 + threshold):
-            trap["status"] = "win"
-        elif direction == "SHORT" and price_now <= entry_price * (1 - threshold):
-            trap["status"] = "win"
-        elif move_pct >= threshold:
-            trap["status"] = "loss"
 
-        if trap["status"] != "open":
-            trap["resolved_at"] = datetime.utcnow().isoformat()
-            trap["exit_price"] = price_now
-            updated = True
+def resolve_trap_outcome(current_price):
+    """
+    Reads open traps and checks outcome based on exit price.
+    Updates log with win/loss tags and outcome info.
+    """
+    try:
+        if not os.path.exists(TRAP_LOG_FILE):
+            return
 
-    if updated:
-        save_trap_journal(journal)
-        print("[~] Trap journal updated with outcome(s).")
+        with open(TRAP_LOG_FILE, "r") as f:
+            data = json.load(f)
 
-if __name__ == "__main__":
-    # Example usage:
-    current_price = 29500.00
-    resolve_trap_outcome(price_now=current_price)            trap["exit_price"] = price_now
-            updated = True
+        updated = False
+        for trap in data:
+            if "exit_price" not in trap:
+                direction = trap.get("direction")
+                entry_price = trap.get("price")
 
-    if updated:
-        save_trap_journal(journal)
-        print("[~] Trap journal updated with outcome(s).")
+                trap["exit_price"] = current_price
+                trap["exit_time"] = time.time()
 
-if __name__ == "__main__":
-    # Example: mark outcomes manually for current BTC price
-    resolve_trap_outcome(price_now=11550.00)
+                # Determine result
+                if direction == "LONG":
+                    trap["outcome"] = "win" if current_price > entry_price else "loss"
+                elif direction == "SHORT":
+                    trap["outcome"] = "win" if current_price < entry_price else "loss"
+                else:
+                    trap["outcome"] = "unknown"
+
+                updated = True
+
+        if updated:
+            with open(TRAP_LOG_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+            print("[✓] Trap outcomes updated")
+
+    except Exception as e:
+        print("[X] Trap outcome resolution failed:", e)
