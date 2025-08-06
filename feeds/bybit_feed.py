@@ -1,50 +1,50 @@
-# feeds/bybit_feed.py
+# feeds/bybit_feed.py (patched with reconnect logic)
 
 import asyncio
 import websockets
 import json
 
 class BybitCVDTracker:
-    def __init__(self, symbol="BTCUSDT"):
-        self.symbol = symbol
+    def __init__(self):
+        self.ws_url = "wss://stream.bybit.com/realtime_public"
+        self.symbol = "BTCUSDT"
         self.cvd = 0
-        self.price = None
+        self.last_price = None
 
     async def connect(self):
-        uri = "wss://stream.bybit.com/v5/public/linear"
-        async with websockets.connect(uri) as ws:
-            subscribe_msg = {
-                "op": "subscribe",
-                "args": [f"publicTrade.{self.symbol}"]
-            }
-            await ws.send(json.dumps(subscribe_msg))
-            async for message in ws:
-                await self.handle_message(json.loads(message))
+        while True:
+            try:
+                async with websockets.connect(self.ws_url) as ws:
+                    sub_msg = {
+                        "op": "subscribe",
+                        "args": [f"trade.{self.symbol}"]
+                    }
+                    await ws.send(json.dumps(sub_msg))
 
-    async def handle_message(self, msg):
-        if "data" in msg and "topic" in msg:
-            for trade in msg["data"]:
-                side = trade["S"]  # "Buy" or "Sell"
-                qty = float(trade["v"])
-                price = float(trade["p"])
-                self.price = price
+                    async for msg in ws:
+                        await self._process(msg)
+            except Exception as e:
+                print("[X] Bybit reconnecting:", e)
+                await asyncio.sleep(5)
 
-                if side == "Buy":
-                    self.cvd += qty
-                elif side == "Sell":
-                    self.cvd -= qty
+    async def _process(self, msg):
+        try:
+            data = json.loads(msg)
+            if data.get("topic", "").startswith("trade."):
+                trades = data.get("data", [])
+                for t in trades:
+                    side = t.get("S")
+                    price = float(t.get("p"))
+                    qty = float(t.get("v"))
+
+                    self.last_price = price
+                    self.cvd += qty if side == "Buy" else -qty
+
+        except Exception as e:
+            print("[X] Bybit parse error:", e)
 
     def get_cvd(self):
         return round(self.cvd, 2)
 
     def get_price(self):
-        return self.price
-
-
-if __name__ == "__main__":
-    tracker = BybitCVDTracker()
-
-    async def run():
-        await tracker.connect()
-
-    asyncio.run(run())
+        return self.last_price
