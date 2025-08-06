@@ -17,7 +17,7 @@ from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
 
 from utils.volume_fetcher import fetch_all_volume
-from volume_scorer import score_volume_bias
+from utils.ai_volume_scoring import score_volume_bias
 from scorer_swing import score_swing_confluence
 
 load_dotenv()
