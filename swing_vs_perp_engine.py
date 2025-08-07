@@ -1,5 +1,3 @@
-# swing_vs_perp_engine.py
-
 import asyncio
 import os
 import time
@@ -15,9 +13,9 @@ from utils.memory_logger import log_snapshot
 from utils.multi_tf_memory import MultiTFMemory
 from utils.spot_perp_alert_dispatcher import SpotPerpAlertDispatcher
 from utils.sniper_alert_logger import log_sniper_alert
-
-from utils.volume_fetcher import fetch_all_volume
+from utils.global_volume_fetcher import fetch_all_volume
 from utils.ai_volume_scoring import score_volume_bias
+
 from scorer_swing import score_swing_confluence
 
 load_dotenv()
@@ -47,7 +45,6 @@ class SwingVsPerpEngine:
     async def monitor(self):
         while True:
             try:
-                # === Collect Prices & CVD ===
                 cb_cvd = self.coinbase.get_cvd()
                 cb_price = self.coinbase.get_last_price()
 
@@ -65,37 +62,31 @@ class SwingVsPerpEngine:
                     await asyncio.sleep(30)
                     continue
 
-                # === CVD Logic ===
                 self.memory.update(cb_cvd, bin_spot, bin_perp)
                 deltas = self.memory.get_all_deltas()
                 scored = score_swing_confluence(deltas)
                 cvd_score = scored["score"]
                 label = scored["label"]
 
-                # === Volume Logic ===
                 volume_data = fetch_all_volume()
                 volume_score, volume_label = score_volume_bias(volume_data)
 
-                # === Final Confidence Score ===
                 final_score = round((cvd_score * 0.7) + (volume_score * 0.3), 2)
 
-                # === Logging ===
                 print("\n==================== SWING BIAS REPORT ====================")
                 for tf in ["15m", "30m", "1h", "4h"]:
                     d = deltas.get(tf)
                     if d:
                         print(f"🕒 {tf} CVD Δ → CB: {d['cb_cvd']}% | Spot: {d['bin_spot']}% | Perp: {d['bin_perp']}%")
-                print(f"💡 Swing Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
-                print(f"🔊 Volume Snapshot: {volume_data}")
+                print(f"🎯 Swing Bias: {label.upper()} | CVD: {cvd_score}/10 | Volume: {volume_score}/10 | Final: {final_score}/10")
+                print("🔊 Volume Snapshot:", volume_data)
                 print("==========================================================")
 
                 core_tf = deltas.get("30m")
                 if not core_tf:
-                    print("[SWING] Missing 30m delta, skipping...")
                     await asyncio.sleep(30)
                     continue
 
-                # === Hash-based alert filtering ===
                 now = time.time()
                 sig_key = f"{label}-{final_score}-{int(spot_price)}"
                 sig_hash = hashlib.sha256(sig_key.encode()).hexdigest()
@@ -118,12 +109,7 @@ class SwingVsPerpEngine:
                     })
 
                     await self.alert_dispatcher.maybe_alert(
-                        signal_text=signal_text,
-                        confidence=final_score,
-                        label=label,
-                        deltas=core_tf,
-                        cvd_score=cvd_score,
-                        volume_score=volume_score
+                        signal_text, final_score, label, core_tf, mode="swing"
                     )
 
             except Exception as e:
