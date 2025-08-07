@@ -9,25 +9,30 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_gpt_commentary(snapshot):
     """
-    Asks GPT to comment on the trap signal snapshot.
+    Uses GPT-4 to provide a short expert commentary on the trap signal.
     """
     try:
+        content = (
+            "You're a professional BTC sniper trade analyst.\n"
+            "Here is a trade trap snapshot:\n"
+            f"{json.dumps(snapshot, indent=2)}\n\n"
+            "Explain this trap signal in 1 short line:"
+        )
+
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You're a professional BTC sniper trade analyst."},
-                {"role": "user", "content": f"Analyze this trap:\n{snapshot}"}
-            ],
-            temperature=0.7
+            messages=[{"role": "user", "content": content}],
+            temperature=0.6,
         )
         return response.choices[0].message.content.strip()
+
     except Exception as e:
         print("[X] GPT trap commentary failed:", e)
         return "GPT unavailable"
 
 def log_trap_signal(snapshot):
     """
-    Logs new trap signal with GPT commentary into local JSON file.
+    Logs trap signal with UUID and GPT commentary into local JSON file.
     """
     snapshot["timestamp"] = time.time()
     snapshot["uuid"] = str(uuid.uuid4())
@@ -46,14 +51,13 @@ def log_trap_signal(snapshot):
             json.dump(data, f, indent=2)
 
         print(f"🪤 Trap logged: {snapshot['signal']} at {snapshot['price']}")
-        print(f"🧠 GPT says: {snapshot['gpt_comment']}")
+        print(f"🤖 GPT says: {snapshot['gpt_comment']}")
     except Exception as e:
         print("[X] Failed to write trap log:", e)
 
-
 def resolve_trap_outcome(current_price):
     """
-    Adds 'exit_price' and win/loss result to each trap without outcome.
+    Loops through trap log and adds outcome results to unresolved traps.
     """
     try:
         if not os.path.exists(TRAP_LOG_FILE):
@@ -65,8 +69,8 @@ def resolve_trap_outcome(current_price):
         updated = False
         for trap in data:
             if "exit_price" not in trap:
-                direction = trap.get("direction")
                 entry = trap.get("price")
+                direction = trap.get("direction")
                 trap["exit_price"] = current_price
                 trap["exit_time"] = time.time()
 
@@ -82,6 +86,7 @@ def resolve_trap_outcome(current_price):
         if updated:
             with open(TRAP_LOG_FILE, "w") as f:
                 json.dump(data, f, indent=2)
+
             print("📈 Trap outcomes resolved and saved.")
 
     except Exception as e:
