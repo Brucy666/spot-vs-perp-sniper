@@ -1,6 +1,7 @@
 import time
 import hashlib
 from utils.discord_alert import send_discord_alert
+from utils.trap_journal import get_gpt_commentary  # Make sure this function is async
 
 class SpotPerpAlertDispatcher:
     def __init__(self, cooldown_seconds=900):
@@ -23,10 +24,25 @@ class SpotPerpAlertDispatcher:
 
             tf_label = {
                 "sniper": "3m",
-                "swing": "15m",
+                "swing": "30m",
                 "reversal": "1h"
             }.get(mode, "15m")
 
+            # GPT Commentary
+            try:
+                gpt_comment = await get_gpt_commentary({
+                    "signal": signal,
+                    "direction": direction,
+                    "confidence": confidence,
+                    "cb_cvd": deltas["cb_cvd"],
+                    "bin_spot": deltas["bin_spot"],
+                    "bin_perp": deltas["bin_perp"],
+                    "label": label
+                })
+            except Exception as e:
+                gpt_comment = f"[GPT error: {e}]"
+
+            # Final Alert Message
             alert = (
                 f"**Brucy Bonus💥**\n"
                 f"{signal}\n\n"
@@ -35,7 +51,8 @@ class SpotPerpAlertDispatcher:
                 f"📊 {tf_label} CVD Δ:\n"
                 f"   • Coinbase: `{deltas['cb_cvd']}%`\n"
                 f"   • Binance Spot: `{deltas['bin_spot']}%`\n"
-                f"   • Binance Perp: `{deltas['bin_perp']}%`\n"
+                f"   • Binance Perp: `{deltas['bin_perp']}%`\n\n"
+                f"🤖 GPT says: _{gpt_comment}_"
             )
 
             await send_discord_alert(alert)
